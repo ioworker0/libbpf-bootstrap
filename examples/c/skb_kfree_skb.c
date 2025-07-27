@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
 #include "skb_kfree_skb.skel.h"
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -250,7 +251,8 @@ static void print_stack_trace(int stack_map_fd, uint32_t stack_id) {
         return;
     }
 
-    ret = bpf_map_lookup_elem(stack_map_fd, &stack_id, ips);
+//    ret = bpf_map_lookup_elem(stack_map_fd, &stack_id, ips);
+    ret = bpf_map_lookup_elem_flags(stack_map_fd, &stack_id, ips, BPF_ANY);
     if (ret < 0) {
         fprintf(stderr, "Failed to lookup stack trace (id: %u), error: %d\n", stack_id, ret);
         return;
@@ -319,6 +321,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
 int main(int argc, char **argv)
 {
     struct ring_buffer *rb = NULL;
+    const char *btf_path = "/tmp/vmlinux.btf";
     int err;
 
     signal(SIGINT, sig_handler);
@@ -332,9 +335,14 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // TODO
-    LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = "/tmp/vmlinux.btf");
-    skel = skb_kfree_skb_bpf__open_opts(&opts);
+    if (access(btf_path, R_OK) == 0) {
+        printf("Found custom BTF at %s, using it.\n", btf_path);
+        LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
+        skel = skb_kfree_skb_bpf__open_opts(&opts);
+    } else {
+        printf("Custom BTF not found at %s. Letting libbpf find one automatically.\n", btf_path);
+        skel = skb_kfree_skb_bpf__open();
+    }
 
     if (!skel) {
         fprintf(stderr, "Failed to open BPF skeleton\n");
