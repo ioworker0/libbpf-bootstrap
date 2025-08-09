@@ -155,6 +155,7 @@ int handle_sched_switch(struct bpf_raw_tracepoint_args *ctx)
 	/* Step 1: Record the switch-out state of the 'prev' task. */
 	prev_pid = BPF_CORE_READ(prev, pid);
 	if (prev_pid > 0) {
+	    // TODO __state 这个 5.10 不存在
 		bool prev_is_running = (BPF_CORE_READ(prev, __state) == TASK_RUNNING);
 		bpf_map_update_elem(&last_ivcsw, &prev_pid, &prev_is_running, BPF_ANY);
 		// If 'prev' was running, it was involuntarily switched out. Treat this as an enqueue event for it.
