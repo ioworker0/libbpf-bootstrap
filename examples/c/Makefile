@@ -25,7 +25,7 @@ CFLAGS := -g -Wall
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 APPS = minimal minimal_legacy minimal_ns bootstrap uprobe kprobe fentry \
-       usdt sockfilter tc ksyscall task_iter lsm skb_kfree_skb skb_kfree_skb_no_reason my_runqslower offcputime
+       usdt sockfilter tc ksyscall task_iter lsm skb_kfree_skb skb_kfree_skb_no_reason my_runqslower offcputime captrace
 
 CARGO ?= $(shell which cargo)
 ifeq ($(strip $(CARGO)),)

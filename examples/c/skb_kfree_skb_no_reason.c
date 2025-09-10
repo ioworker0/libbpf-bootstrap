@@ -361,10 +361,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    if (parse_reason_enum() < 0) {
-	    fprintf(stderr, "Failed to parse drop reasons\n");
-	    goto cleanup;
-    }
+//    if (parse_reason_enum() < 0) {
+//	    fprintf(stderr, "Failed to parse drop reasons\n");
+//	    goto cleanup;
+//    }
 	print_drop_reasons();
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
