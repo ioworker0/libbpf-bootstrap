@@ -8,44 +8,37 @@
 #include <errno.h>
 #include <time.h>
 #include <string.h>
-#include <stdint.h> // added for uint64_t
+#include <stdint.h>
 
-// define u64 for user space to match BPF side definition
 typedef uint64_t u64;
 
-// Include the generated BPF skeleton header
 #include "my_thp_policy.skel.h"
 
-// --- Event structure (must match BPF program's definition) ---
-// Copy this from the .bpf.c file to ensure consistency
-// And define enums that are part of the event structure
 enum bpf_thp_vma_type {
-	BPF_THP_VM_NONE = 0,
-	BPF_THP_VM_HUGEPAGE,
-	BPF_THP_VM_NOHUGEPAGE,
+    BPF_THP_VM_NONE = 0,
+    BPF_THP_VM_HUGEPAGE,
+    BPF_THP_VM_NOHUGEPAGE,
 };
 
-// Define tva_type enum for user-space
 enum tva_type {
-	TVA_SMAPS = 0,		/* Exposing "THPeligible:" in smaps. */
-	TVA_PAGEFAULT,		/* Serving a non-swap page fault. */
-	TVA_KHUGEPAGED,		/* Khugepaged collapse. */
-	TVA_FORCED_COLLAPSE,	/* Forced collapse (e.g. MADV_COLLAPSE). */
-	TVA_SWAP,		/* Serving a swap */
+    TVA_SMAPS = 0,
+    TVA_PAGEFAULT,
+    TVA_KHUGEPAGED,
+    TVA_FORCED_COLLAPSE,
+    TVA_SWAP,
 };
 
 struct thp_event {
-	u64 timestamp_ns;
-	pid_t pid;
-	char comm[16]; // TASK_COMM_LEN is 16
-	unsigned long vma_start;
-	unsigned long vma_end;
-	enum bpf_thp_vma_type vma_type;
-	enum tva_type tva_type; // ADDED: tva_type field
-	unsigned long original_orders;
-	int suggested_order;
+    u64 timestamp_ns;
+    pid_t pid;
+    char comm[16];
+    unsigned long vma_start;
+    unsigned long vma_end;
+    enum bpf_thp_vma_type vma_type;
+    enum tva_type tva_type;
+    unsigned long original_orders;
+    int suggested_order;
 };
-
 
 static volatile bool exiting = false;
 
@@ -59,21 +52,17 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
     return vfprintf(stderr, format, args);
 }
 
-// --- Helper to convert tva_type enum to string ---
 const char *tva_type_to_str(enum tva_type type) {
     switch (type) {
-        case TVA_SMAPS:          return "SMAPS";
-        case TVA_PAGEFAULT:      return "PAGEFAULT";
-        case TVA_KHUGEPAGED:     return "KHUGEPAGED";
-        case TVA_FORCED_COLLAPSE:return "FORCED_COLLAPSE";
-        case TVA_SWAP:           return "SWAP";
-        default:                 return "UNKNOWN";
+    case TVA_SMAPS:          return "SMAPS";
+    case TVA_PAGEFAULT:      return "PAGEFAULT";
+    case TVA_KHUGEPAGED:     return "KHUGEPAGED";
+    case TVA_FORCED_COLLAPSE:return "FORCED_COLLAPSE";
+    case TVA_SWAP:           return "SWAP";
+    default:                 return "UNKNOWN";
     }
 }
 
-/*
- * Callback function for handling events from the BPF ring buffer.
- */
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct thp_event *e = data;
@@ -89,7 +78,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
            ts, e->comm, e->pid,
            e->vma_start, e->vma_end,
            e->original_orders, e->suggested_order, e->vma_type,
-           tva_type_to_str(e->tva_type)); // ADDED: Print tva_type as string
+           tva_type_to_str(e->tva_type));
 
     return 0;
 }
@@ -98,7 +87,6 @@ int main(int argc, char **argv)
 {
     struct my_thp_policy_bpf *skel;
     struct ring_buffer *rb = NULL;
-    struct bpf_link *link = NULL; // manage struct_ops link manually
     int err;
 
     libbpf_set_print(libbpf_print_fn);
@@ -111,26 +99,26 @@ int main(int argc, char **argv)
 
     err = my_thp_policy_bpf__load(skel);
     if (err) {
-        fprintf(stderr, "ERROR: Failed to load BPF skeleton\n");
+        fprintf(stderr, "ERROR: Failed to load BPF skeleton: %s\n", strerror(-err));
         goto cleanup;
     }
 
-    // Attach struct_ops via its map (bpf_thp_ops) generated from .struct_ops section
-    link = bpf_map__attach_struct_ops(skel->maps.bpf_thp_ops);
-    if (!link) {
-        err = -errno;
-        fprintf(stderr, "ERROR: Failed to attach struct_ops (bpf_thp_ops): %s\n", strerror(errno));
+    err = my_thp_policy_bpf__attach(skel);
+    if (err) {
+        fprintf(stderr, "ERROR: Failed to attach BPF skeleton: %s\n", strerror(-err));
         goto cleanup;
     }
+
+    printf("BPF struct_ops 'bpf_thp_ops' loaded and attached successfully.\n");
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
         err = -errno;
-        fprintf(stderr, "ERROR: Failed to create ring buffer\n");
+        fprintf(stderr, "ERROR: Failed to create ring buffer: %s\n", strerror(-err));
         goto cleanup;
     }
 
-    printf("BPF THP policy program loaded and attached.\n");
+    printf("BPF THP event polling started.\n");
     printf("%-8s %-16s %-7s %s\n", "TIME", "COMM", "PID", "VMA RANGE | ORIG_ORDERS | SUG_ORDER | VMA_TYPE | TVA_TYPE");
 
     signal(SIGINT, sig_handler);
@@ -150,8 +138,6 @@ int main(int argc, char **argv)
 
 cleanup:
     ring_buffer__free(rb);
-    if (link)
-        bpf_link__destroy(link);
     my_thp_policy_bpf__destroy(skel);
     return err < 0 ? -err : 0;
 }
