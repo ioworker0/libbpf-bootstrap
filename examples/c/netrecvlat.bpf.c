@@ -46,8 +46,8 @@ BPF_RATELIMIT(rate, 1, 100);
 
 /* User configurable (via .rodata rewrite) */
 volatile const __u64 to_netif     = 10ULL  * 1000 * 1000;   // 10 ms in ns
-volatile const __u64 to_tcpv4     = 50ULL * 1000 * 1000;    // 50 ms
-volatile const __u64 to_user_copy = 150ULL * 1000 * 1000;   // 150 ms
+volatile const __u64 to_tcpv4     = 20ULL * 1000 * 1000;    // 20 ms
+volatile const __u64 to_user_copy = 50ULL * 1000 * 1000;    // 50 ms
 
 struct perf_event_t {
 	char comm[TASK_COMM_LEN];

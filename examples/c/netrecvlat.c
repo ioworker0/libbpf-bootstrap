@@ -147,6 +147,12 @@ static void update_offset_map(struct netrecvlat_bpf *skel)
 	__u32 key = 0;
 	int64_t off = est_mono_wall_offset_ns();
 	if (off == 0) return;
+	static int64_t prev_off = 0; // remember last offset
+	const int64_t ALERT_DIFF_NS = 10LL * 1000 * 1000; // 10 ms
+	if (prev_off && llabs(off - prev_off) > ALERT_DIFF_NS) {
+		fprintf(stderr, "ALERT: mono_wall_offset changed >10ms: prev=%lldns new=%lldns diff=%lldns\n", (long long)prev_off, (long long)off, (long long)(off - prev_off));
+	}
+	prev_off = off;
 	int map_fd = bpf_map__fd(skel->maps.mono_wall_offset_map);
 	if (map_fd < 0) return;
 	if (bpf_map_update_elem(map_fd, &key, &off, BPF_ANY) != 0) {
@@ -231,7 +237,7 @@ int main(int argc, char **argv)
 
 	// Initial offset map write
 	update_offset_map(skel);
-	long refresh_ms = 10; // default 10s
+	long refresh_ms = 1; // default 1s
 	const char *env_refresh = getenv("NETRECVLAT_OFFSET_REFRESH_MS");
 	if (env_refresh && env_refresh[0]) {
 		long v = strtol(env_refresh, NULL, 10);
