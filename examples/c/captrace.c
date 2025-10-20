@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <bpf/libbpf.h>
 #include "captrace.skel.h"
+#include <time.h>
 
 #define CAP_MAX 41 /* 0..40 inclusive */
 static const char *cap_names[CAP_MAX] = {
@@ -69,6 +70,41 @@ struct event {
 
 static volatile bool exiting = false;
 static void handle_signal(int sig) { (void)sig; exiting = true; }
+
+// 优化：维护 20 个 bucket (pid % 20)，每个 bucket 绑定一个 pid 和其 0..40 cap 的最后打印时间（秒）。
+// 若同一 pid 同一 cap 在 60 秒内再次出现则抑制；pid 变化时重置该 bucket。
+#define PID_CACHE_BUCKETS 1024
+#define SUPPRESS_WINDOW_SEC 60
+struct pid_cache_bucket {
+    __u32 pid;              // 0 表示空
+    uint32_t window_start;  // 窗口起始时间 (秒)
+    uint64_t cap_bitmap;    // 记录窗口内已打印过的 cap (bit 0..40)
+};
+static struct pid_cache_bucket pid_cache[PID_CACHE_BUCKETS];
+
+static inline int suppress_by_pid_cache(__u32 pid, __u32 cap)
+{
+    if (cap >= 64) return 0; // 防御
+    time_t now = time(NULL);
+    if (now == (time_t)-1) return 0;
+    unsigned idx = pid % PID_CACHE_BUCKETS;
+    struct pid_cache_bucket *b = &pid_cache[idx];
+
+    // 触发重置条件：
+    // 1) bucket 绑定的 pid 不同
+    // 2) 窗口已过期
+    if (b->pid != pid || (b->window_start != 0 && (uint32_t)now - b->window_start >= SUPPRESS_WINDOW_SEC)) {
+        b->pid = pid;
+        b->window_start = (uint32_t)now;
+        b->cap_bitmap = 0ULL; // 清空窗口
+    }
+
+    uint64_t mask = 1ULL << cap;
+    if (b->cap_bitmap & mask)
+        return 1; // 在当前窗口内已打印过
+    b->cap_bitmap |= mask; // 记录
+    return 0;
+}
 
 struct env_info {
     char daokeappuk[128];
@@ -138,6 +174,15 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     const char *name = (e->cap < CAP_MAX) ? cap_names[e->cap] : "UNKNOWN";
     struct env_info envs;
     extract_env_info(e->reaper_pid, &envs); // 只使用 reaper_pid，不做 fallback
+
+    // Skip if DAOKEAPPUK is empty or UNKNOWN
+    if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
+        return 0;
+
+    // pid%1024 bucket + 窗口内 bitmap 去重
+    if (suppress_by_pid_cache(e->pid, e->cap))
+        return 0;
+
     printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %s\n",
            e->pid,
            e->tid,

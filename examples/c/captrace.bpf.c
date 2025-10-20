@@ -22,12 +22,39 @@ struct {
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
-SEC("kprobe/ns_capable")
-int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
+struct last_key {
+    __u32 pid;
+    __u32 cap;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(struct last_key));
+    __uint(max_entries, 1); // single slot per CPU
+} last_seen SEC(".maps");
+
+// 公共逻辑: 采集 task -> nsproxy -> {net_ns, pid_ns_for_children} , 做过滤并提交事件
+static __always_inline int record_cap(int cap)
 {
-    // 先获取 task、netns 与 pidns，做过滤；不过滤才分配 ringbuf
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     struct nsproxy *nsp = BPF_CORE_READ(task, nsproxy);
+
+    u64 id = bpf_get_current_pid_tgid();
+    __u32 pid = id >> 32;
+    __u32 tid = (__u32)id;
+
+    // Per-CPU last (pid,cap) suppression
+    __u32 key0 = 0;
+    struct last_key *lk = bpf_map_lookup_elem(&last_seen, &key0);
+    if (lk) {
+        if (lk->pid == pid && lk->cap == (unsigned)cap) {
+            return 0; // suppress identical consecutive event on this CPU
+        }
+        // update (pid, cap)
+        lk->pid = pid;
+        lk->cap = cap;
+    }
 
     struct net *net_ns = NULL;
     if (nsp)
@@ -38,12 +65,10 @@ int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
         struct ns_common ns_net_common = {};
         BPF_CORE_READ_INTO(&ns_net_common, net_ns, ns);
         net_inum = ns_net_common.inum;
-        if (filter_net_ns_inum && net_inum == filter_net_ns_inum) {
-            return 0; // 网络命名空间过滤提前返回
-        }
+        if (filter_net_ns_inum && net_inum == filter_net_ns_inum)
+            return 0; // 网络命名空间过滤
     }
 
-    // 提前读取 pid namespace 与 reaper_pid 进行过滤
     unsigned int pidns_inum = 0;
     __u32 reaper_pid = 0;
     struct pid_namespace *pid_ns = NULL;
@@ -62,27 +87,34 @@ int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
             }
         }
     }
-    // reaper_pid 过滤 (与之前逻辑一致，<=1 丢弃)
-    if (reaper_pid <= 1) {
-        return 0; // 不占用 ringbuf
-    }
+    if (reaper_pid <= 1)
+        return 0; // 过滤不合法的 namespace
 
-    // 通过所有过滤，申请 ringbuf
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
         return 0;
 
-    u64 id = bpf_get_current_pid_tgid();
-    e->pid = id >> 32;
-    e->tid = (__u32)id;
+    e->pid = pid;
+    e->tid = tid;
     e->cap = (__u32)cap;
     e->net_ns_inum = net_inum;
     e->pid_ns_inum = pidns_inum;
     e->reaper_pid = reaper_pid;
-
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     bpf_ringbuf_submit(e, 0);
     return 0;
+}
+
+SEC("kprobe/ns_capable")
+int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
+{
+    return record_cap(cap);
+}
+
+SEC("kprobe/security_capable")
+int BPF_KPROBE(handle_security_capable, const struct cred *cred, struct user_namespace *ns, int cap, unsigned int opts)
+{
+    return record_cap(cap);
 }
 
 char LICENSE[] SEC("license") = "GPL";
