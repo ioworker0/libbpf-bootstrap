@@ -3,9 +3,12 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define TASK_COMM_LEN 16
+#define TASK_COMM_LEN 8
+
+#define CAP_OPT_NOAUDIT 2
 
 const volatile __u64 filter_net_ns_inum = 0; // 0: 不过滤
+const volatile bool capture_stack = false;   // 是否采集堆栈 (由用户态设置)
 
 struct event {
     __u32 pid;
@@ -15,12 +18,21 @@ struct event {
     __u32 reaper_pid;
     __u64 net_ns_inum; // 网络命名空间 inode
     char  comm[TASK_COMM_LEN];
+    s32   stack_id; // -1 未采集
 };
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024);
+    __uint(max_entries, 1024);
 } events SEC(".maps");
+
+// 栈跟踪 map (用于获取内核栈帧地址)
+struct {
+    __uint(type, BPF_MAP_TYPE_STACK_TRACE);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u64) * 127);
+    __uint(max_entries, 8192);
+} stack_traces SEC(".maps");
 
 struct last_key {
     __u32 pid;
@@ -35,7 +47,7 @@ struct {
 } last_seen SEC(".maps");
 
 // 公共逻辑: 采集 task -> nsproxy -> {net_ns, pid_ns_for_children} , 做过滤并提交事件
-static __always_inline int record_cap(int cap)
+static __always_inline int record_cap(int cap, int stack_id)
 {
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     struct nsproxy *nsp = BPF_CORE_READ(task, nsproxy);
@@ -93,7 +105,6 @@ static __always_inline int record_cap(int cap)
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
         return 0;
-
     e->pid = pid;
     e->tid = tid;
     e->cap = (__u32)cap;
@@ -101,6 +112,7 @@ static __always_inline int record_cap(int cap)
     e->pid_ns_inum = pidns_inum;
     e->reaper_pid = reaper_pid;
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
+    e->stack_id = stack_id;
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
@@ -108,13 +120,32 @@ static __always_inline int record_cap(int cap)
 SEC("kprobe/ns_capable")
 int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
 {
-    return record_cap(cap);
+    int sid = -1;
+    if (capture_stack)
+        sid = bpf_get_stackid(ctx, &stack_traces, BPF_F_REUSE_STACKID);
+    return record_cap(cap, sid);
 }
 
 SEC("kprobe/security_capable")
 int BPF_KPROBE(handle_security_capable, const struct cred *cred, struct user_namespace *ns, int cap, unsigned int opts)
 {
-    return record_cap(cap);
+    if (opts & CAP_OPT_NOAUDIT)
+        return 0;
+    int sid = -1;
+    if (capture_stack)
+        sid = bpf_get_stackid(ctx, &stack_traces, BPF_F_REUSE_STACKID);
+    return record_cap(cap, sid);
+}
+
+SEC("kprobe/ns_capable_common")
+int BPF_KPROBE(handle_ns_capable_common, struct user_namespace *ns, int cap, unsigned int opts)
+{
+    if (opts & CAP_OPT_NOAUDIT)
+        return 0;
+    int sid = -1;
+    if (capture_stack)
+        sid = bpf_get_stackid(ctx, &stack_traces, BPF_F_REUSE_STACKID);
+    return record_cap(cap, sid);
 }
 
 char LICENSE[] SEC("license") = "GPL";

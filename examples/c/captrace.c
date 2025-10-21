@@ -9,8 +9,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
 #include "captrace.skel.h"
 #include <time.h>
+#include <getopt.h>
 
 #define CAP_MAX 41 /* 0..40 inclusive */
 static const char *cap_names[CAP_MAX] = {
@@ -65,15 +67,19 @@ struct event {
     __u64 pid_ns_inum;
     __u32 reaper_pid; // 该 PID namespace 的 child_reaper PID
     __u64 net_ns_inum; // 新增: 网络命名空间 inode (与 BPF 端保持一致)
-    char  comm[16];
+    char  comm[8];
+    int   stack_id; // 新增: 栈 ID (-1 未采集)
 };
+
+// 选项: 是否打印堆栈
+static bool opt_stack = false;
+static int stack_fd = -1;
 
 static volatile bool exiting = false;
 static void handle_signal(int sig) { (void)sig; exiting = true; }
 
-// 优化：维护 20 个 bucket (pid % 20)，每个 bucket 绑定一个 pid 和其 0..40 cap 的最后打印时间（秒）。
 // 若同一 pid 同一 cap 在 60 秒内再次出现则抑制；pid 变化时重置该 bucket。
-#define PID_CACHE_BUCKETS 1024
+#define PID_CACHE_BUCKETS 2048
 #define SUPPRESS_WINDOW_SEC 60
 struct pid_cache_bucket {
     __u32 pid;              // 0 表示空
@@ -167,20 +173,66 @@ static unsigned long long get_self_netns_inum(void) {
     return 0;
 }
 
+// ====== Kernel symbol resolution (for stack addresses) ======
+#define MAX_SYMBOLS 250000
+#define MAX_SYMBOL_NAME_LEN 128
+struct kernel_symbol { uint64_t addr; char name[MAX_SYMBOL_NAME_LEN]; };
+static struct kernel_symbol *kallsyms = NULL;
+static int ksym_cnt = 0;
+
+static int load_kernel_symbols(void)
+{
+    FILE *f = fopen("/proc/kallsyms", "r");
+    if (!f)
+        return -1;
+    kallsyms = malloc(sizeof(*kallsyms) * MAX_SYMBOLS);
+    if (!kallsyms) { fclose(f); return -1; }
+    char line[256];
+    while (ksym_cnt < MAX_SYMBOLS && fgets(line, sizeof(line), f)) {
+        uint64_t addr; char type; char name[MAX_SYMBOL_NAME_LEN];
+        if (sscanf(line, "%" PRIx64 " %c %127s", &addr, &type, name) == 3) {
+            kallsyms[ksym_cnt].addr = addr;
+            strncpy(kallsyms[ksym_cnt].name, name, MAX_SYMBOL_NAME_LEN - 1);
+            kallsyms[ksym_cnt].name[MAX_SYMBOL_NAME_LEN - 1] = '\0';
+            ksym_cnt++;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+static const char *resolve_kernel_symbol(uint64_t addr)
+{
+    static char buf[MAX_SYMBOL_NAME_LEN + 32];
+    if (ksym_cnt == 0) return "[no_kallsyms]";
+    int l = 0, r = ksym_cnt - 1, mi = -1;
+    while (l <= r) {
+        int m = l + (r - l) / 2;
+        if (kallsyms[m].addr <= addr) { mi = m; l = m + 1; } else r = m - 1; }
+    if (mi >= 0) {
+        uint64_t off = addr - kallsyms[mi].addr;
+        snprintf(buf, sizeof(buf), "%s+0x%lx", kallsyms[mi].name, (unsigned long)off);
+        return buf;
+    }
+    return "[unresolved]";
+}
+// ====== End kernel symbol resolution ======
+
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     (void)ctx; (void)data_sz;
     const struct event *e = data;
     const char *name = (e->cap < CAP_MAX) ? cap_names[e->cap] : "UNKNOWN";
     struct env_info envs;
+
+    // pid%n bucket + 窗口内 bitmap 去重
+    if (suppress_by_pid_cache(e->pid, e->cap))
+        return 0;
+
     extract_env_info(e->reaper_pid, &envs); // 只使用 reaper_pid，不做 fallback
 
     // Skip if DAOKEAPPUK is empty or UNKNOWN
     if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
-        return 0;
-
-    // pid%1024 bucket + 窗口内 bitmap 去重
-    if (suppress_by_pid_cache(e->pid, e->cap))
         return 0;
 
     printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %s\n",
@@ -196,6 +248,18 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
            envs.instanceid,
            envs.insip,
            e->comm);
+
+    if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
+        unsigned long addrs[127] = {0};
+        int key = e->stack_id;
+        if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
+            printf("  stack_id=%d\n", e->stack_id);
+            for (int i = 0; i < 127; i++) {
+                if (!addrs[i]) break;
+                printf("    [%02d] [<%016lx>] %s\n", i, addrs[i], resolve_kernel_symbol(addrs[i]));
+            }
+        }
+    }
     return 0;
 }
 
@@ -205,6 +269,15 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *fmt, va_li
     return vfprintf(stderr, fmt, args);
 }
 
+static void usage(const char *prog)
+{
+    fprintf(stderr,
+        "Usage: %s [OPTIONS]\n\n"
+        "Options:\n"
+        "  -s, --stack          Capture & print kernel stack for each event\n"
+        "  -h, --help           Show this help\n", prog);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -212,6 +285,29 @@ int main(int argc, char **argv)
     struct ring_buffer *rb = NULL;
     int err;
     const char *btf_path = "/tmp/vmlinux.btf";
+
+    static const struct option long_opts[] = {
+        {"stack", no_argument, NULL, 's'},
+        {"help", no_argument, NULL, 'h'},
+        {0, 0, 0, 0}
+    };
+    int opt;
+    while ((opt = getopt_long(argc, argv, "sh", long_opts, NULL)) != -1) {
+        switch (opt) {
+        case 's': opt_stack = true; break;
+        case 'h': usage(argv[0]); return 0;
+        default: usage(argv[0]); return 1;
+        }
+    }
+
+    // 如果开启堆栈, 只在 main 中调用一次加载符号
+    if (opt_stack) {
+        if (load_kernel_symbols() != 0) {
+            fprintf(stderr, "Warning: failed to load /proc/kallsyms, will show raw addresses.\n");
+        } else {
+            fprintf(stderr, "Loaded %d kernel symbols.\n", ksym_cnt);
+        }
+    }
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -231,6 +327,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "Failed to open skeleton\n");
         return 1;
     }
+
+    // 设置是否采集堆栈
+    if (skel->rodata)
+        skel->rodata->capture_stack = opt_stack;
 
     // 获取当前进程网络命名空间 inode，并传给 BPF 端用于过滤
     unsigned long long self_netns = get_self_netns_inum();
@@ -252,6 +352,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    // 记录栈 map fd
+    if (opt_stack)
+        stack_fd = bpf_map__fd(skel->maps.stack_traces);
+
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "Failed to create ring buffer\n");
@@ -267,10 +371,9 @@ int main(int argc, char **argv)
     signal(SIGTERM, handle_signal);
 
     while (!exiting) {
-        err = ring_buffer__poll(rb, 200);
-        if (err == -EINTR) { err = 0; break; }
+        err = ring_buffer__poll(rb, 100); // 100ms
         if (err < 0) {
-            fprintf(stderr, "ring_buffer__poll error: %d\n", err);
+            fprintf(stderr, "Polling error: %d\n", err);
             break;
         }
     }
