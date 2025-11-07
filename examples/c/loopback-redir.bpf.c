@@ -52,5 +52,7 @@ int bpf_redir_handler(struct sk_msg_md *msg)
     // sk_msg_md ports are in different byte order: local_port is host, remote_port is network
     bpf_trace_printk(fmt, sizeof(fmt), ret, netns_cookie, ports);
 
-    return ret;
+    // Always return SK_PASS.
+    // The kernel will check msg->sk_redir to decide the final action.
+    return SK_PASS;
 }
