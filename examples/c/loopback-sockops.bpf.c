@@ -43,10 +43,12 @@ static __always_inline void bpf_sock_ops_ipv4(struct bpf_sock_ops *skops)
     };
     int ret = bpf_sock_hash_update(skops, &sock_map, &key, BPF_ANY);
 
+    #ifdef DEBUG
     // New, more descriptive logging
     __u64 ports = ((__u64) bpf_ntohl(skops->local_port) << 32) | skops->remote_port;
     char fmt[] = "bypass-log: loc=sockops-UPDATE, ret=%d, netns=%llu, ports(s:d)=%llx\n";
     bpf_trace_printk(fmt, sizeof(fmt), ret, netns_cookie, ports);
+    #endif
 }
 
 SEC("sockops")

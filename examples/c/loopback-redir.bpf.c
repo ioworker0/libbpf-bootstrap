@@ -45,12 +45,14 @@ int bpf_redir_handler(struct sk_msg_md *msg)
     };
     long ret = bpf_msg_redirect_hash(msg, &sock_map, &key, BPF_F_INGRESS);
 
+    #ifdef DEBUG
     // New, more descriptive logging.
     // We log here regardless of the outcome to help with debugging.
     __u64 ports = ((__u64)bpf_ntohl(msg->local_port) << 32) | msg->remote_port;
     char fmt[] = "bypass-log: loc=redir-REDIRECT, ret=%d, netns=%llu, ports(s:d)=%llx\n";
     // sk_msg_md ports are in different byte order: local_port is host, remote_port is network
     bpf_trace_printk(fmt, sizeof(fmt), ret, netns_cookie, ports);
+    #endif
 
     // Always return SK_PASS.
     // The kernel will check msg->sk_redir to decide the final action.
