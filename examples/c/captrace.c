@@ -83,6 +83,9 @@ static struct plugin_config g_config;
 static struct socket_protocol g_socket;
 static bool g_enable_plux_agent = false;
 
+/* Function declarations */
+int init_plux_agent(int argc, char **argv);
+
 static volatile bool exiting = false;
 static void handle_signal(int sig) { (void)sig; exiting = true; }
 
@@ -407,7 +410,7 @@ cleanup:
 // 配置解析相关函数
 
 // 初始化 Plux Agent 连接
-static int init_plux_agent(int argc, char **argv)
+int init_plux_agent(int argc, char **argv)
 {
     int err;
 
