@@ -48,10 +48,30 @@ int parse_config_args(int argc, char *argv[], struct plugin_config *config)
         return 0;
     }
 
+    /* Debug: print received config string with escaped characters visible */
+    fprintf(stderr, "Received config string: [%s]\n", config_str);
+    fprintf(stderr, "String length: %zu\n", strlen(config_str));
+    fprintf(stderr, "First few bytes (hex): ");
+    for (size_t i = 0; i < (strlen(config_str) < 20 ? strlen(config_str) : 20); i++) {
+        fprintf(stderr, "%02x ", (unsigned char)config_str[i]);
+    }
+    fprintf(stderr, "\n");
+
     /* Parse JSON using cJSON */
     json = cJSON_Parse(config_str);
     if (!json) {
+        const char *error_ptr = cJSON_GetErrorPtr();
         fprintf(stderr, "Failed to parse JSON config: %s\n", config_str);
+        if (error_ptr) {
+            fprintf(stderr, "JSON error before: %s\n", error_ptr);
+        }
+        fprintf(stderr, "\n=== USAGE HINT ===\n");
+        fprintf(stderr, "Make sure to quote the JSON properly:\n");
+        fprintf(stderr, "  Correct (single quotes, no escaping):\n");
+        fprintf(stderr, "    --config '{\"socket_path\":\"/path/to/socket\"}'\n");
+        fprintf(stderr, "  Correct (double quotes, with escaping):\n");
+        fprintf(stderr, "    --config \"{\\\"socket_path\\\":\\\"/path/to/socket\\\"}\"\n");
+        fprintf(stderr, "==================\n");
         return -1;
     }
 

@@ -296,7 +296,7 @@ int main(int argc, char **argv)
     struct captrace_bpf *skel = NULL;
     struct ring_buffer *rb = NULL;
     int err;
-    const char *btf_path = "/plux/bpf/vmlinux.btf";
+    const char *btf_path = "/plux/btf/kernel.btf";
 
     static const struct option long_opts[] = {
         {"stack", no_argument, NULL, 's'},
