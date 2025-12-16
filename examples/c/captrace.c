@@ -286,6 +286,7 @@ static void usage(const char *prog)
         "Usage: %s [OPTIONS]\n\n"
         "Options:\n"
         "  -s, --stack          Capture & print kernel stack for each event\n"
+        "  -c, --config CONFIG  JSON configuration for Plux Agent\n"
         "  -h, --help           Show this help\n", prog);
 }
 
@@ -300,13 +301,15 @@ int main(int argc, char **argv)
     static const struct option long_opts[] = {
         {"stack", no_argument, NULL, 's'},
         {"help", no_argument, NULL, 'h'},
+        {"config", required_argument, NULL, 'c'},
         {0, 0, 0, 0}
     };
     int opt;
-    while ((opt = getopt_long(argc, argv, "sh", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "shc:", long_opts, NULL)) != -1) {
         switch (opt) {
         case 's': opt_stack = true; break;
         case 'h': usage(argv[0]); return 0;
+        case 'c': /* config option will be handled in init_plux_agent */ break;
         default: usage(argv[0]); return 1;
         }
     }
