@@ -116,9 +116,14 @@ $(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
 	$(Q)$(BPFTOOL) gen skeleton $< > $@
 
+# Common additional source files for all apps
+# This allows all applications to use Plux Agent functionality
+COMMON_SRCS = config.c protocol.c socket.c cJSON.c
+
 # Build user-space code
 $(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: %.skel.h
 
+# Generic rule that supports additional source files
 $(OUTPUT)/%.o: %.c $(wildcard %.h) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
@@ -127,10 +132,10 @@ $(patsubst %,$(OUTPUT)/%.o,$(BZS_APPS)): $(LIBBLAZESYM_OBJ)
 
 $(BZS_APPS): $(LIBBLAZESYM_OBJ)
 
-# Build application binary
+# Build application binary with common additional source files
 $(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
 	$(call msg,BINARY,$@)
-	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -o $@
+	$(Q)$(CC) $(CFLAGS) $(OUTPUT)/$*.o $(COMMON_SRCS) $(LIBBPF_OBJ) $(ALL_LDFLAGS) -lelf -lz -lpthread -o $@
 
 # delete failed targets
 .DELETE_ON_ERROR:
