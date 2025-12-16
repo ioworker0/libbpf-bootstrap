@@ -11,6 +11,9 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "captrace.skel.h"
+#include "config.h"
+#include "socket.h"
+#include "protocol.h"
 #include <time.h>
 #include <getopt.h>
 
@@ -74,6 +77,11 @@ struct event {
 // 选项: 是否打印堆栈
 static bool opt_stack = false;
 static int stack_fd = -1;
+
+// Plux Agent 配置
+static struct plugin_config g_config;
+static struct socket_protocol g_socket;
+static bool g_enable_plux_agent = false;
 
 static volatile bool exiting = false;
 static void handle_signal(int sig) { (void)sig; exiting = true; }
@@ -284,7 +292,7 @@ int main(int argc, char **argv)
     struct captrace_bpf *skel = NULL;
     struct ring_buffer *rb = NULL;
     int err;
-    const char *btf_path = "/tmp/vmlinux.btf";
+    const char *btf_path = "/plux/bpf/vmlinux.btf";
 
     static const struct option long_opts[] = {
         {"stack", no_argument, NULL, 's'},
@@ -307,6 +315,17 @@ int main(int argc, char **argv)
         } else {
             fprintf(stderr, "Loaded %d kernel symbols.\n", ksym_cnt);
         }
+    }
+
+    // 初始化 Plux Agent
+    err = init_plux_agent(argc, argv);
+    if (err < 0) {
+        fprintf(stderr, "Failed to initialize Plux Agent (continuing without Agent): %d\n", err);
+        printf("Running in standalone mode - no Plux Agent connection\n");
+        // 注意：这里不退出，即使 Agent 初始化失败也继续运行
+    } else {
+        printf("Plux Agent connection established successfully!\n");
+        printf("Listening for capability events and sending to Agent...\n");
     }
 
     signal(SIGINT, handle_signal);
@@ -381,5 +400,84 @@ int main(int argc, char **argv)
 cleanup:
     ring_buffer__free(rb);
     captrace_bpf__destroy(skel);
+
     return err < 0 ? -err : 0;
+}
+
+// 配置解析相关函数
+
+// 初始化 Plux Agent 连接
+static int init_plux_agent(int argc, char **argv)
+{
+    int err;
+
+    printf("=== Initializing Plux Agent connection ===\n");
+
+    // 初始化配置
+    init_plugin_config(&g_config);
+    strncpy(g_config.plugin_name, "plux-ebpf-captrace", sizeof(g_config.plugin_name) - 1);
+    printf("Plugin name: %s\n", g_config.plugin_name);
+
+    // 解析命令行配置
+    err = parse_config_args(argc, argv, &g_config);
+    if (err < 0) {
+        fprintf(stderr, "Failed to parse config: %d\n", err);
+        return err;
+    }
+
+    // 检查是否提供了 socket_path
+    if (strlen(g_config.socket_path) == 0) {
+        printf("No socket_path provided in config, running without Plux Agent\n");
+        printf("Use: --config '{\"socket_path\":\"/path/to/socket\"}' to enable Agent\n");
+        g_enable_plux_agent = false;
+        return 0;
+    }
+
+    printf("Target socket path: %s\n", g_config.socket_path);
+    printf("Debug mode: %s\n", g_config.debug_mode ? "enabled" : "disabled");
+    printf("Heartbeat interval: %d seconds\n", g_config.heartbeat_interval);
+
+    // 检查 socket 文件是否存在
+    err = check_socket_file(g_config.socket_path);
+    if (err < 0) {
+        fprintf(stderr, "Socket file not accessible: %s (error: %d)\n", g_config.socket_path, err);
+        return err;
+    }
+    printf("Socket file exists and is accessible\n");
+
+    // 初始化 socket 协议
+    err = init_socket_protocol(&g_socket, &g_config);
+    if (err < 0) {
+        fprintf(stderr, "Failed to init socket protocol: %d\n", err);
+        return err;
+    }
+    printf("Socket protocol initialized\n");
+
+    // 连接到 Agent
+    err = socket_connect(&g_socket);
+    if (err < 0) {
+        fprintf(stderr, "Failed to connect to Plux Agent: %d\n", err);
+        return err;
+    }
+    printf("Connected to Plux Agent\n");
+
+    // 发送握手
+    err = socket_send_handshake(&g_socket);
+    if (err < 0) {
+        fprintf(stderr, "Failed to send handshake: %d\n", err);
+        return err;
+    }
+    printf("Handshake sent successfully\n");
+
+    // 启动心跳
+    err = socket_start_heartbeat(&g_socket);
+    if (err < 0) {
+        fprintf(stderr, "Failed to start heartbeat: %d\n", err);
+        return err;
+    }
+    printf("Heartbeat thread started (%d second interval)\n", g_config.heartbeat_interval);
+
+    printf("=== Plux Agent connection established ===\n");
+    g_enable_plux_agent = true;
+    return 0;
 }
