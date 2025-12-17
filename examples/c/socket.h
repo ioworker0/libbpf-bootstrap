@@ -42,6 +42,9 @@ int socket_send_handshake(struct socket_protocol *sp);
 /* Send heartbeat message */
 int socket_send_heartbeat(struct socket_protocol *sp);
 
+/* Send event message */
+int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t data_len);
+
 /* Start/stop heartbeat */
 int socket_start_heartbeat(struct socket_protocol *sp);
 int socket_stop_heartbeat(struct socket_protocol *sp);

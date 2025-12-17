@@ -237,7 +237,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     struct env_info envs;
 
     // pid%n bucket + 窗口内 bitmap 去重
-    if (suppress_by_pid_cache(e->pid, e->cap))
+    if (!g_enable_plux_agent && suppress_by_pid_cache(e->pid, e->cap))
         return 0;
 
     extract_env_info(e->reaper_pid, &envs); // 只使用 reaper_pid，不做 fallback
@@ -246,28 +246,64 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
         return 0;
 
-    printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %s\n",
-           e->pid,
-           e->tid,
-           e->cap,
-           name,
-           (unsigned long long)e->pid_ns_inum,
-           e->reaper_pid,
-           (unsigned long long)e->net_ns_inum,
-           envs.daokeappuk,
-           envs.daokeenv,
-           envs.instanceid,
-           envs.insip,
-           e->comm);
 
-    if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
-        unsigned long addrs[127] = {0};
-        int key = e->stack_id;
-        if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
-            printf("  stack_id=%d\n", e->stack_id);
-            for (int i = 0; i < 127; i++) {
-                if (!addrs[i]) break;
-                printf("    [%02d] [<%016lx>] %s\n", i, addrs[i], resolve_kernel_symbol(addrs[i]));
+    // 发送 event 给 plugin，g_enable_plux_agent = true
+    if (g_enable_plux_agent) {
+        struct captrace_event_data event_data = {
+            .pid = e->pid,
+            .tid = e->tid,
+            .cap = e->cap,
+            .pid_ns_inum = e->pid_ns_inum,
+            .reaper_pid = e->reaper_pid,
+            .net_ns_inum = e->net_ns_inum
+        };
+
+        // 复制字符串数据
+        strncpy(event_data.daokeappuk, envs.daokeappuk, sizeof(event_data.daokeappuk) - 1);
+        strncpy(event_data.daokeenv, envs.daokeenv, sizeof(event_data.daokeenv) - 1);
+        strncpy(event_data.instanceid, envs.instanceid, sizeof(event_data.instanceid) - 1);
+        strncpy(event_data.insip, envs.insip, sizeof(event_data.insip) - 1);
+        strncpy(event_data.comm, e->comm, sizeof(event_data.comm) - 1);
+
+        // 确保字符串以 null 结尾
+        event_data.daokeappuk[sizeof(event_data.daokeappuk) - 1] = '\0';
+        event_data.daokeenv[sizeof(event_data.daokeenv) - 1] = '\0';
+        event_data.instanceid[sizeof(event_data.instanceid) - 1] = '\0';
+        event_data.insip[sizeof(event_data.insip) - 1] = '\0';
+        event_data.comm[sizeof(event_data.comm) - 1] = '\0';
+
+        // 创建 JSON 数据
+        char json_buf[1024];
+        int ret = create_captrace_event_json(&event_data, json_buf, sizeof(json_buf));
+        if (ret > 0) {
+            // 发送事件给 Agent
+            socket_send_event(&g_socket, json_buf, ret);
+        }
+    } else {
+        // 原有的打印逻辑
+        printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %s\n",
+               e->pid,
+               e->tid,
+               e->cap,
+               name,
+               (unsigned long long)e->pid_ns_inum,
+               e->reaper_pid,
+               (unsigned long long)e->net_ns_inum,
+               envs.daokeappuk,
+               envs.daokeenv,
+               envs.instanceid,
+               envs.insip,
+               e->comm);
+
+        if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
+            unsigned long addrs[127] = {0};
+            int key = e->stack_id;
+            if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
+                printf("  stack_id=%d\n", e->stack_id);
+                for (int i = 0; i < 127; i++) {
+                    if (!addrs[i]) break;
+                    printf("    [%02d] [<%016lx>] %s\n", i, addrs[i], resolve_kernel_symbol(addrs[i]));
+                }
             }
         }
     }
@@ -314,17 +350,17 @@ int main(int argc, char **argv)
         }
     }
 
-    // 如果开启堆栈, 只在 main 中调用一次加载符号
-    if (opt_stack) {
+    // 初始化 Plux Agent
+    err = init_plux_agent(argc, argv);
+
+    // 如果开启堆栈且未启用 Plux Agent, 才加载内核符号
+    if (opt_stack && !g_enable_plux_agent) {
         if (load_kernel_symbols() != 0) {
             fprintf(stderr, "Warning: failed to load /proc/kallsyms, will show raw addresses.\n");
         } else {
             fprintf(stderr, "Loaded %d kernel symbols.\n", ksym_cnt);
         }
     }
-
-    // 初始化 Plux Agent
-    err = init_plux_agent(argc, argv);
     if (err < 0) {
         fprintf(stderr, "Failed to initialize Plux Agent (continuing without Agent): %d\n", err);
         printf("Running in standalone mode - no Plux Agent connection\n");
@@ -353,9 +389,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // 设置是否采集堆栈
+    // 设置是否采集堆栈 (Agent 模式下不采集堆栈)
     if (skel->rodata)
-        skel->rodata->capture_stack = opt_stack;
+        skel->rodata->capture_stack = opt_stack && !g_enable_plux_agent;
 
     // 获取当前进程网络命名空间 inode，并传给 BPF 端用于过滤
     unsigned long long self_netns = get_self_netns_inum();
@@ -377,8 +413,8 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    // 记录栈 map fd
-    if (opt_stack)
+    // 记录栈 map fd (Agent 模式下不需要)
+    if (opt_stack && !g_enable_plux_agent)
         stack_fd = bpf_map__fd(skel->maps.stack_traces);
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);

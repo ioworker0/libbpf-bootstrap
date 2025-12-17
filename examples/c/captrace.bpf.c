@@ -60,9 +60,10 @@ static __always_inline int record_cap(int cap, int stack_id)
     __u32 key0 = 0;
     struct last_key *lk = bpf_map_lookup_elem(&last_seen, &key0);
     if (lk) {
-        if (lk->pid == pid && lk->cap == (unsigned)cap) {
-            return 0; // suppress identical consecutive event on this CPU
-        }
+// 不过滤，交给 plugin 处理
+//        if (lk->pid == pid && lk->cap == (unsigned)cap) {
+//            return 0; // suppress identical consecutive event on this CPU
+//        }
         // update (pid, cap)
         lk->pid = pid;
         lk->cap = cap;

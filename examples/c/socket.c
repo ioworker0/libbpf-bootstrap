@@ -237,3 +237,13 @@ int socket_check_file(const char *socket_path)
     return check_socket_file(socket_path);
 }
 
+/* Send event message */
+int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t data_len)
+{
+    if (!sp || !event_data || data_len == 0) {
+        return -1;
+    }
+
+    return socket_send_raw_message(sp, MSG_TYPE_EVENTS, (const char *)event_data, data_len);
+}
+

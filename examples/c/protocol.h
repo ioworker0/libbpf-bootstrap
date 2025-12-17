@@ -6,8 +6,12 @@
 #include <stdbool.h>
 
 /* Protocol message types */
-#define MSG_TYPE_HANDSHAKE  0x0007  /* 握手确认 */
 #define MSG_TYPE_HEARTBEAT  0x0001  /* 心跳包 */
+#define MSG_TYPE_EVENTS     0x0003  /* 事件数据 */
+#define MSG_TYPE_LOGS_INFO  0x0004  /* 信息日志 */
+#define MSG_TYPE_LOGS_WARN  0x0005  /* 警告日志 */
+#define MSG_TYPE_LOGS_ERROR 0x0006  /* 错误日志 */
+#define MSG_TYPE_HANDSHAKE  0x0007  /* 握手确认 */
 
 /* Protocol frame format: [2 bytes: msg_type][4 bytes: data_len][N bytes: data] */
 #define FRAME_HEADER_SIZE 6
@@ -30,6 +34,21 @@ struct heartbeat_data {
     char status[32];  /* "running", "stopped", "error" */
 };
 
+/* Event data structure for captrace */
+struct captrace_event_data {
+    uint32_t pid;
+    uint32_t tid;
+    uint32_t cap;
+    uint64_t pid_ns_inum;
+    uint32_t reaper_pid;
+    uint64_t net_ns_inum;
+    char daokeappuk[128];
+    char daokeenv[64];
+    char instanceid[128];
+    char insip[64];
+    char comm[8];
+};
+
 /* Pack frame header for sending */
 static inline void pack_frame_header(struct frame_header *header, uint16_t msg_type, uint32_t data_len)
 {
@@ -40,5 +59,6 @@ static inline void pack_frame_header(struct frame_header *header, uint16_t msg_t
 /* JSON serialization functions */
 int create_handshake_json(const struct handshake_data *data, char *json_buf, size_t buf_size);
 int create_heartbeat_json(const struct heartbeat_data *data, char *json_buf, size_t buf_size);
+int create_captrace_event_json(const struct captrace_event_data *data, char *json_buf, size_t buf_size);
 
 #endif /* __PLUX_PROTOCOL_H */
