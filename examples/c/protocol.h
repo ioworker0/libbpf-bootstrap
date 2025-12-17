@@ -45,7 +45,7 @@ struct captrace_event_data {
     char daokeappuk[128];
     char daokeenv[64];
     char instanceid[128];
-    char insip[64];
+    char daokeip[64];
     char comm[8];
 };
 

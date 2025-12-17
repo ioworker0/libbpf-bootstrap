@@ -127,16 +127,17 @@ struct env_info {
     char daokeappuk[128];
     char daokeenv[64];
     char instanceid[128];
-    char insip[64];
+    char daokeip[64];
 };
 
 static void extract_env_info(pid_t pid, struct env_info *info)
 {
+    //https://wiki.17u.cn/wiki?fid=71ae923cfe664d5f8bb53a6c840ea506
     if (!info) return;
     snprintf(info->daokeappuk, sizeof(info->daokeappuk), "UNKNOWN");
     snprintf(info->daokeenv, sizeof(info->daokeenv), "UNKNOWN");
     snprintf(info->instanceid, sizeof(info->instanceid), "UNKNOWN");
-    snprintf(info->insip, sizeof(info->insip), "UNKNOWN");
+    snprintf(info->daokeip, sizeof(info->daokeip), "UNKNOWN");
     char path[96];
     snprintf(path, sizeof(path), "/proc/%d/root/proc/1/environ", pid);
     int fd = open(path, O_RDONLY);
@@ -164,9 +165,9 @@ static void extract_env_info(pid_t pid, struct env_info *info)
         } else if (len > 11 && !strncmp(entry, "INSTANCEID=", 11)) {
             size_t vlen = len - 11; if (vlen >= sizeof(info->instanceid)) vlen = sizeof(info->instanceid) - 1;
             memcpy(info->instanceid, entry + 11, vlen); info->instanceid[vlen] = '\0';
-        } else if (len > 6 && !strncmp(entry, "INSIP=", 6)) {
-            size_t vlen = len - 6; if (vlen >= sizeof(info->insip)) vlen = sizeof(info->insip) - 1;
-            memcpy(info->insip, entry + 6, vlen); info->insip[vlen] = '\0';
+        } else if (len > 8 && !strncmp(entry, "DAOKEIP=", 8)) {
+            size_t vlen = len - 8; if (vlen >= sizeof(info->daokeip)) vlen = sizeof(info->daokeip) - 1;
+            memcpy(info->daokeip, entry + 8, vlen); info->daokeip[vlen] = '\0';
         }
     }
 }
@@ -262,14 +263,14 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         strncpy(event_data.daokeappuk, envs.daokeappuk, sizeof(event_data.daokeappuk) - 1);
         strncpy(event_data.daokeenv, envs.daokeenv, sizeof(event_data.daokeenv) - 1);
         strncpy(event_data.instanceid, envs.instanceid, sizeof(event_data.instanceid) - 1);
-        strncpy(event_data.insip, envs.insip, sizeof(event_data.insip) - 1);
+        strncpy(event_data.daokeip, envs.daokeip, sizeof(event_data.daokeip) - 1);
         strncpy(event_data.comm, e->comm, sizeof(event_data.comm) - 1);
 
         // 确保字符串以 null 结尾
         event_data.daokeappuk[sizeof(event_data.daokeappuk) - 1] = '\0';
         event_data.daokeenv[sizeof(event_data.daokeenv) - 1] = '\0';
         event_data.instanceid[sizeof(event_data.instanceid) - 1] = '\0';
-        event_data.insip[sizeof(event_data.insip) - 1] = '\0';
+        event_data.daokeip[sizeof(event_data.daokeip) - 1] = '\0';
         event_data.comm[sizeof(event_data.comm) - 1] = '\0';
 
         // 创建 JSON 数据
@@ -292,7 +293,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                envs.daokeappuk,
                envs.daokeenv,
                envs.instanceid,
-               envs.insip,
+               envs.daokeip,
                e->comm);
 
         if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
@@ -426,7 +427,7 @@ int main(int argc, char **argv)
     printf("Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
     printf("%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %s\n",
            "PID", "TID", "CAP", "CAP_NAME", "PID_NS_INUM", "INITPID", "NETNS_INUM",
-           "DAOKEAPPUK", "DAOKEENV", "INSTANCEID", "INSIP", "COMM");
+           "DAOKEAPPUK", "DAOKEENV", "INSTANCEID", "DAOKEIP", "COMM");
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
