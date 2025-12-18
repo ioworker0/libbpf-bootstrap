@@ -4,6 +4,7 @@
 #include <bpf/bpf_core_read.h>
 
 #define TASK_COMM_LEN 8
+#define CMDLINE_LEN 32
 
 #define CAP_OPT_NOAUDIT 2
 
@@ -18,6 +19,7 @@ struct event {
     __u32 reaper_pid;
     __u64 net_ns_inum; // 网络命名空间 inode
     char  comm[TASK_COMM_LEN];
+    char  cmdline[CMDLINE_LEN];
     s32   stack_id; // -1 未采集
 };
 
@@ -113,6 +115,19 @@ static __always_inline int record_cap(int cap, int stack_id)
     e->pid_ns_inum = pidns_inum;
     e->reaper_pid = reaper_pid;
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
+    
+    // 读取 cmdline (从进程的 mm 结构体)
+    struct mm_struct *mm = BPF_CORE_READ(task, mm);
+    if (mm) {
+        unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
+        unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
+        unsigned long len = arg_end - arg_start;
+        if (len > CMDLINE_LEN - 1)
+            len = CMDLINE_LEN - 1;
+        if (len > 0)
+            bpf_probe_read_user(&e->cmdline, len, (void *)arg_start);
+    }
+    
     e->stack_id = stack_id;
     bpf_ringbuf_submit(e, 0);
     return 0;

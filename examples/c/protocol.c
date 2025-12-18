@@ -84,6 +84,7 @@ int create_captrace_event_json(const struct captrace_event_data *data, char *jso
     cJSON_AddStringToObject(json, "instanceid", data->instanceid);
     cJSON_AddStringToObject(json, "daokeip", data->daokeip);
     cJSON_AddStringToObject(json, "comm", data->comm);
+    cJSON_AddStringToObject(json, "cmdline", data->cmdline);
 
     /* Print JSON to string */
     json_str = cJSON_PrintUnformatted(json);

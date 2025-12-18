@@ -47,6 +47,7 @@ struct captrace_event_data {
     char instanceid[128];
     char daokeip[64];
     char comm[8];
+    char cmdline[32];
 };
 
 /* Pack frame header for sending */

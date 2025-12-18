@@ -71,6 +71,7 @@ struct event {
     __u32 reaper_pid; // 该 PID namespace 的 child_reaper PID
     __u64 net_ns_inum; // 新增: 网络命名空间 inode (与 BPF 端保持一致)
     char  comm[8];
+    char  cmdline[32]; // 新增: 完整命令行
     int   stack_id; // 新增: 栈 ID (-1 未采集)
 };
 
@@ -265,6 +266,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         strncpy(event_data.instanceid, envs.instanceid, sizeof(event_data.instanceid) - 1);
         strncpy(event_data.daokeip, envs.daokeip, sizeof(event_data.daokeip) - 1);
         strncpy(event_data.comm, e->comm, sizeof(event_data.comm) - 1);
+        strncpy(event_data.cmdline, e->cmdline, sizeof(event_data.cmdline) - 1);
 
         // 确保字符串以 null 结尾
         event_data.daokeappuk[sizeof(event_data.daokeappuk) - 1] = '\0';
@@ -272,6 +274,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         event_data.instanceid[sizeof(event_data.instanceid) - 1] = '\0';
         event_data.daokeip[sizeof(event_data.daokeip) - 1] = '\0';
         event_data.comm[sizeof(event_data.comm) - 1] = '\0';
+        event_data.cmdline[sizeof(event_data.cmdline) - 1] = '\0';
 
         // 创建 JSON 数据
         char json_buf[1024];
@@ -282,7 +285,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         }
     } else {
         // 原有的打印逻辑
-        printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %s\n",
+        printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %-8s %-32s\n",
                e->pid,
                e->tid,
                e->cap,
@@ -294,7 +297,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                envs.daokeenv,
                envs.instanceid,
                envs.daokeip,
-               e->comm);
+               e->comm,
+               e->cmdline);
 
         if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
             unsigned long addrs[127] = {0};
@@ -425,9 +429,9 @@ int main(int argc, char **argv)
     }
 
     printf("Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
-    printf("%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %s\n",
+    printf("%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %-8s %-32s\n",
            "PID", "TID", "CAP", "CAP_NAME", "PID_NS_INUM", "INITPID", "NETNS_INUM",
-           "DAOKEAPPUK", "DAOKEENV", "INSTANCEID", "DAOKEIP", "COMM");
+           "DAOKEAPPUK", "DAOKEENV", "INSTANCEID", "DAOKEIP", "COMM", "CMDLINE");
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
