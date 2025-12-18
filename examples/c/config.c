@@ -20,6 +20,7 @@ void init_plugin_config(struct plugin_config *config)
 
     config->heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL;
     config->debug_mode = false;
+    config->stack = false;  // 默认不采集堆栈
 
     /* socket_path and plugin_name will remain empty until set */
 }
@@ -101,6 +102,14 @@ int parse_config_args(int argc, char *argv[], struct plugin_config *config)
     if (item && cJSON_IsString(item) && item->valuestring) {
         strncpy(config->plugin_name, item->valuestring, sizeof(config->plugin_name) - 1);
         config->plugin_name[sizeof(config->plugin_name) - 1] = '\0';
+    }
+
+    /* Extract stack */
+    item = cJSON_GetObjectItem(json, "stack");
+    if (item && cJSON_IsTrue(item)) {
+        config->stack = true;
+    } else if (item && cJSON_IsFalse(item)) {
+        config->stack = false;
     }
 
     cJSON_Delete(json);

@@ -19,6 +19,7 @@ struct plugin_config {
     char plugin_name[CONFIG_MAX_PLUGIN_NAME];
     int heartbeat_interval;
     bool debug_mode;
+    bool stack;  // 是否采集堆栈
 };
 
 /* Configuration management functions */

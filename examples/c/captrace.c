@@ -371,6 +371,11 @@ int main(int argc, char **argv)
     // 初始化 Plux Agent
     err = init_plux_agent(argc, argv);
 
+    // g_config.stack 不直接打印 stack，而是发送给 agent
+//    if (g_enable_plux_agent && g_config.stack) {
+//        opt_stack = true;
+//    }
+
     // 如果开启堆栈且未启用 Plux Agent, 才加载内核符号
     if (opt_stack && !g_enable_plux_agent) {
         if (load_kernel_symbols() != 0) {
@@ -496,6 +501,7 @@ int init_plux_agent(int argc, char **argv)
     printf("Target socket path: %s\n", g_config.socket_path);
     printf("Debug mode: %s\n", g_config.debug_mode ? "enabled" : "disabled");
     printf("Heartbeat interval: %d seconds\n", g_config.heartbeat_interval);
+    printf("Stack capture: %s\n", g_config.stack ? "enabled" : "disabled");
 
     // 检查 socket 文件是否存在
     err = check_socket_file(g_config.socket_path);
@@ -527,6 +533,17 @@ int init_plux_agent(int argc, char **argv)
     err = socket_send_log_info(&g_socket, log_msg);
     if (err < 0) {
         fprintf(stderr, "Failed to send info log: %d\n", err);
+        // 不返回错误，继续执行
+    } else {
+        printf("Info log sent: %s\n", log_msg);
+    }
+
+    // 发送 info 日志：stack 配置
+    snprintf(log_msg, sizeof(log_msg), "[plux-ebpf-captrace] Stack capture %s", 
+             g_config.stack ? "enabled" : "disabled");
+    err = socket_send_log_info(&g_socket, log_msg);
+    if (err < 0) {
+        fprintf(stderr, "Failed to send stack config log: %d\n", err);
         // 不返回错误，继续执行
     } else {
         printf("Info log sent: %s\n", log_msg);
