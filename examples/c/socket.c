@@ -247,3 +247,34 @@ int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t
     return socket_send_raw_message(sp, MSG_TYPE_EVENTS, (const char *)event_data, data_len);
 }
 
+/* Send log info message */
+int socket_send_log_info(struct socket_protocol *sp, const char *message)
+{
+    if (!sp || !message) {
+        return -1;
+    }
+
+    // 不发送 \0 终止符，Go 接收端基于长度处理字符串
+    return socket_send_raw_message(sp, MSG_TYPE_LOGS_INFO, message, strlen(message));
+}
+
+/* Send log warn message */
+int socket_send_log_warn(struct socket_protocol *sp, const char *message)
+{
+    if (!sp || !message) {
+        return -1;
+    }
+
+    return socket_send_raw_message(sp, MSG_TYPE_LOGS_WARN, message, strlen(message));
+}
+
+/* Send log error message */
+int socket_send_log_error(struct socket_protocol *sp, const char *message)
+{
+    if (!sp || !message) {
+        return -1;
+    }
+
+    return socket_send_raw_message(sp, MSG_TYPE_LOGS_ERROR, message, strlen(message));
+}
+

@@ -45,6 +45,11 @@ int socket_send_heartbeat(struct socket_protocol *sp);
 /* Send event message */
 int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t data_len);
 
+/* Send log messages */
+int socket_send_log_info(struct socket_protocol *sp, const char *message);
+int socket_send_log_warn(struct socket_protocol *sp, const char *message);
+int socket_send_log_error(struct socket_protocol *sp, const char *message);
+
 /* Start/stop heartbeat */
 int socket_start_heartbeat(struct socket_protocol *sp);
 int socket_stop_heartbeat(struct socket_protocol *sp);

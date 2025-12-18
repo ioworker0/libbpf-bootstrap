@@ -521,6 +521,17 @@ int init_plux_agent(int argc, char **argv)
     }
     printf("Connected to Plux Agent\n");
 
+    // 发送 info 日志：socket_path 已获取
+    char log_msg[256];
+    snprintf(log_msg, sizeof(log_msg), "[plux-ebpf-captrace] Socket path configured: %s", g_config.socket_path);
+    err = socket_send_log_info(&g_socket, log_msg);
+    if (err < 0) {
+        fprintf(stderr, "Failed to send info log: %d\n", err);
+        // 不返回错误，继续执行
+    } else {
+        printf("Info log sent: %s\n", log_msg);
+    }
+
     // 发送握手
     err = socket_send_handshake(&g_socket);
     if (err < 0) {
