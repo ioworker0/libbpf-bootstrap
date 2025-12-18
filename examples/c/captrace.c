@@ -238,6 +238,19 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     const char *name = (e->cap < CAP_MAX) ? cap_names[e->cap] : "UNKNOWN";
     struct env_info envs;
 
+    // 处理 cmdline: 将 \0 替换为空格以便显示
+    char cmdline_display[32];
+    memcpy(cmdline_display, e->cmdline, sizeof(cmdline_display));
+    for (int i = 0; i < (int)sizeof(cmdline_display) - 1; i++) {
+        if (cmdline_display[i] == '\0') {
+            // 如果遇到连续的 \0，说明已经到达字符串末尾
+            if (i > 0 && cmdline_display[i-1] == '\0')
+                break;
+            cmdline_display[i] = ' ';  // 将参数分隔符 \0 替换为空格
+        }
+    }
+    cmdline_display[sizeof(cmdline_display) - 1] = '\0';
+
     // pid%n bucket + 窗口内 bitmap 去重
     if (!g_enable_plux_agent && suppress_by_pid_cache(e->pid, e->cap))
         return 0;
@@ -266,7 +279,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         strncpy(event_data.instanceid, envs.instanceid, sizeof(event_data.instanceid) - 1);
         strncpy(event_data.daokeip, envs.daokeip, sizeof(event_data.daokeip) - 1);
         strncpy(event_data.comm, e->comm, sizeof(event_data.comm) - 1);
-        strncpy(event_data.cmdline, e->cmdline, sizeof(event_data.cmdline) - 1);
+        strncpy(event_data.cmdline, cmdline_display, sizeof(event_data.cmdline) - 1);
 
         // 确保字符串以 null 结尾
         event_data.daokeappuk[sizeof(event_data.daokeappuk) - 1] = '\0';
@@ -298,7 +311,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                envs.instanceid,
                envs.daokeip,
                e->comm,
-               e->cmdline);
+               cmdline_display);
 
         if (opt_stack && e->stack_id >= 0 && stack_fd >= 0) {
             unsigned long addrs[127] = {0};

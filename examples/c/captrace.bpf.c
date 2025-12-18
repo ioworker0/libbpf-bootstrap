@@ -116,6 +116,9 @@ static __always_inline int record_cap(int cap, int stack_id)
     e->reaper_pid = reaper_pid;
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     
+    // 初始化 cmdline 为空字符串
+    __builtin_memset(e->cmdline, 0, sizeof(e->cmdline));
+    
     // 读取 cmdline (从进程的 mm 结构体)
     struct mm_struct *mm = BPF_CORE_READ(task, mm);
     if (mm) {
@@ -124,8 +127,11 @@ static __always_inline int record_cap(int cap, int stack_id)
         unsigned long len = arg_end - arg_start;
         if (len > CMDLINE_LEN - 1)
             len = CMDLINE_LEN - 1;
-        if (len > 0)
+        if (len > 0) {
             bpf_probe_read_user(&e->cmdline, len, (void *)arg_start);
+            // 确保以 null 结尾
+            e->cmdline[CMDLINE_LEN - 1] = '\0';
+        }
     }
     
     e->stack_id = stack_id;
