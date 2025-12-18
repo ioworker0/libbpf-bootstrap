@@ -527,6 +527,22 @@ int init_plux_agent(int argc, char **argv)
     }
     printf("Connected to Plux Agent\n");
 
+    // 发送握手
+    err = socket_send_handshake(&g_socket);
+    if (err < 0) {
+        fprintf(stderr, "Failed to send handshake: %d\n", err);
+        return err;
+    }
+    printf("Handshake sent successfully\n");
+
+    // 启动心跳
+    err = socket_start_heartbeat(&g_socket);
+    if (err < 0) {
+        fprintf(stderr, "Failed to start heartbeat: %d\n", err);
+        return err;
+    }
+    printf("Heartbeat thread started (%d second interval)\n", g_config.heartbeat_interval);
+
     // 发送 info 日志：socket_path 已获取
     char log_msg[256];
     snprintf(log_msg, sizeof(log_msg), "[plux-ebpf-captrace] Socket path configured: %s", g_config.socket_path);
@@ -548,22 +564,6 @@ int init_plux_agent(int argc, char **argv)
     } else {
         printf("Info log sent: %s\n", log_msg);
     }
-
-    // 发送握手
-    err = socket_send_handshake(&g_socket);
-    if (err < 0) {
-        fprintf(stderr, "Failed to send handshake: %d\n", err);
-        return err;
-    }
-    printf("Handshake sent successfully\n");
-
-    // 启动心跳
-    err = socket_start_heartbeat(&g_socket);
-    if (err < 0) {
-        fprintf(stderr, "Failed to start heartbeat: %d\n", err);
-        return err;
-    }
-    printf("Heartbeat thread started (%d second interval)\n", g_config.heartbeat_interval);
 
     printf("=== Plux Agent connection established ===\n");
     g_enable_plux_agent = true;
