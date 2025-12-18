@@ -247,6 +247,26 @@ int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t
     return socket_send_raw_message(sp, MSG_TYPE_EVENTS, (const char *)event_data, data_len);
 }
 
+/* Send stacktrace message */
+int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_data *stacktrace)
+{
+    char json_buf[16384];  // 大缓冲区以容纳堆栈地址数组
+    int ret;
+
+    if (!sp || !stacktrace) {
+        return -1;
+    }
+
+    /* Create JSON */
+    ret = create_stacktrace_json(stacktrace, json_buf, sizeof(json_buf));
+    if (ret < 0) {
+        fprintf(stderr, "Failed to create stacktrace JSON\n");
+        return ret;
+    }
+
+    return socket_send_raw_message(sp, MSG_TYPE_STACKTRACE, json_buf, strlen(json_buf));
+}
+
 /* Send log info message */
 int socket_send_log_info(struct socket_protocol *sp, const char *message)
 {

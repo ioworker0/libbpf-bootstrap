@@ -296,6 +296,32 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             // 发送事件给 Agent
             socket_send_event(&g_socket, json_buf, ret);
         }
+
+        // 如果配置了 stack 且有堆栈数据，发送堆栈信息
+        if (g_config.stack && e->stack_id >= 0 && stack_fd >= 0) {
+            unsigned long addrs[127] = {0};
+            int key = e->stack_id;
+            if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
+                // 统计实际深度
+                uint32_t depth = 0;
+                for (int i = 0; i < 127; i++) {
+                    if (!addrs[i]) break;
+                    depth++;
+                }
+
+                // 填充 stacktrace_data
+                struct stacktrace_data stacktrace;
+                stacktrace.depth = depth;
+                for (uint32_t i = 0; i < depth; i++) {
+                    stacktrace.addresses[i] = addrs[i];
+                }
+
+                // 发送堆栈给 Agent
+                if (socket_send_stacktrace(&g_socket, &stacktrace) < 0) {
+                    fprintf(stderr, "Failed to send stacktrace\n");
+                }
+            }
+        }
     } else {
         // 原有的打印逻辑
         printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %-8s %-32s\n",
@@ -412,9 +438,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // 设置是否采集堆栈 (Agent 模式下不采集堆栈)
+    // 设置是否采集堆栈
+    // - 命令行 -s 参数：standalone 模式打印堆栈
+    // - 配置 stack: true：Agent 模式发送堆栈
+    bool should_capture_stack = opt_stack || (g_enable_plux_agent && g_config.stack);
     if (skel->rodata)
-        skel->rodata->capture_stack = opt_stack && !g_enable_plux_agent;
+        skel->rodata->capture_stack = should_capture_stack;
 
     // 获取当前进程网络命名空间 inode，并传给 BPF 端用于过滤
     unsigned long long self_netns = get_self_netns_inum();
@@ -436,8 +465,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    // 记录栈 map fd (Agent 模式下不需要)
-    if (opt_stack && !g_enable_plux_agent)
+    // 记录栈 map fd
+    // - Standalone 模式 + opt_stack：需要用于打印和符号解析
+    // - Agent 模式 + g_config.stack：需要用于发送堆栈给 Agent
+    if (should_capture_stack)
         stack_fd = bpf_map__fd(skel->maps.stack_traces);
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);

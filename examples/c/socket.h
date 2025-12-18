@@ -45,6 +45,9 @@ int socket_send_heartbeat(struct socket_protocol *sp);
 /* Send event message */
 int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t data_len);
 
+/* Send stacktrace message */
+int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_data *stacktrace);
+
 /* Send log messages */
 int socket_send_log_info(struct socket_protocol *sp, const char *message);
 int socket_send_log_warn(struct socket_protocol *sp, const char *message);

@@ -12,6 +12,7 @@
 #define MSG_TYPE_LOGS_WARN  0x0005  /* 警告日志 */
 #define MSG_TYPE_LOGS_ERROR 0x0006  /* 错误日志 */
 #define MSG_TYPE_HANDSHAKE  0x0007  /* 握手确认 */
+#define MSG_TYPE_STACKTRACE 0x0008  /* 堆栈跟踪 */
 
 /* Protocol frame format: [2 bytes: msg_type][4 bytes: data_len][N bytes: data] */
 #define FRAME_HEADER_SIZE 6
@@ -50,6 +51,13 @@ struct captrace_event_data {
     char cmdline[32];
 };
 
+/* Stacktrace data structure */
+#define MAX_STACK_DEPTH 127
+struct stacktrace_data {
+    uint32_t depth;  /* 实际堆栈深度 */
+    uint64_t addresses[MAX_STACK_DEPTH];  /* 堆栈地址数组 */
+};
+
 /* Pack frame header for sending */
 static inline void pack_frame_header(struct frame_header *header, uint16_t msg_type, uint32_t data_len)
 {
@@ -61,5 +69,6 @@ static inline void pack_frame_header(struct frame_header *header, uint16_t msg_t
 int create_handshake_json(const struct handshake_data *data, char *json_buf, size_t buf_size);
 int create_heartbeat_json(const struct heartbeat_data *data, char *json_buf, size_t buf_size);
 int create_captrace_event_json(const struct captrace_event_data *data, char *json_buf, size_t buf_size);
+int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, size_t buf_size);
 
 #endif /* __PLUX_PROTOCOL_H */

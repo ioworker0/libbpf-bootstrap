@@ -156,3 +156,65 @@ cleanup:
 
     return ret;
 }
+
+/* Create stacktrace JSON */
+int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, size_t buf_size)
+{
+    cJSON *json = NULL;
+    cJSON *addresses_array = NULL;
+    char *json_str = NULL;
+    int ret = -1;
+
+    if (!data || !json_buf || buf_size == 0) {
+        return -1;
+    }
+
+    /* Create JSON object */
+    json = cJSON_CreateObject();
+    if (!json) {
+        return -1;
+    }
+
+    /* Add addresses array */
+    addresses_array = cJSON_CreateArray();
+    if (!addresses_array) {
+        goto cleanup;
+    }
+
+    for (uint32_t i = 0; i < data->depth && i < MAX_STACK_DEPTH; i++) {
+        char addr_str[32];
+        snprintf(addr_str, sizeof(addr_str), "0x%lx", (unsigned long)data->addresses[i]);
+        cJSON *addr_item = cJSON_CreateString(addr_str);
+        if (!addr_item) {
+            cJSON_Delete(addresses_array);
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(addresses_array, addr_item);
+    }
+
+    cJSON_AddItemToObject(json, "addresses", addresses_array);
+
+    /* Print JSON to string */
+    json_str = cJSON_PrintUnformatted(json);
+    if (!json_str) {
+        goto cleanup;
+    }
+
+    /* Copy to output buffer */
+    if (strlen(json_str) >= buf_size) {
+        goto cleanup;
+    }
+
+    strcpy(json_buf, json_str);
+    ret = strlen(json_buf);
+
+cleanup:
+    if (json_str) {
+        free(json_str);
+    }
+    if (json) {
+        cJSON_Delete(json);
+    }
+
+    return ret;
+}
