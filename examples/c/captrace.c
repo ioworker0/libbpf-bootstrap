@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "captrace.skel.h"
@@ -377,6 +378,16 @@ int main(int argc, char **argv)
     struct ring_buffer *rb = NULL;
     int err;
     const char *btf_path = "/plux/btf/kernel.btf";
+
+    // 提升内存锁定限制，BPF maps 需要锁定内存
+    struct rlimit rlim = {
+        .rlim_cur = RLIM_INFINITY,
+        .rlim_max = RLIM_INFINITY,
+    };
+    if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
+        fprintf(stderr, "Warning: failed to increase RLIMIT_MEMLOCK: %s\n", strerror(errno));
+        // 继续执行，libbpf 会自动处理
+    }
 
     static const struct option long_opts[] = {
         {"stack", no_argument, NULL, 's'},

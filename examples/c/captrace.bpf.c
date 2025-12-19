@@ -25,15 +25,15 @@ struct event {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1024);
+    __uint(max_entries, 32 * 1024 * 1024);  // 32MB，可存储约 30万+ 事件
 } events SEC(".maps");
 
 // 栈跟踪 map (用于获取内核栈帧地址)
 struct {
     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
     __uint(key_size, sizeof(__u32));
-    __uint(value_size, sizeof(__u64) * 127);
-    __uint(max_entries, 8192);
+    __uint(value_size, sizeof(__u64) * 127);  // 每个堆栈 127 个地址，约 1KB
+    __uint(max_entries, 32768);  // 最多 32768 个不同堆栈，约 32MB 内存
 } stack_traces SEC(".maps");
 
 struct last_key {
