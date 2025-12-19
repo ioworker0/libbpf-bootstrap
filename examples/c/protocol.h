@@ -56,6 +56,13 @@ struct captrace_event_data {
 struct stacktrace_data {
     uint32_t depth;  /* 实际堆栈深度 */
     uint64_t addresses[MAX_STACK_DEPTH];  /* 堆栈地址数组 */
+    char daokeappuk[128];
+    char daokeenv[64];
+    char instanceid[128];
+    char daokeip[64];
+    char comm[8];
+    char cmdline[32];
+    uint32_t cap;
 };
 
 /* Pack frame header for sending */

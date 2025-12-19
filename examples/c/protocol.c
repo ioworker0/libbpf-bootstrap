@@ -194,6 +194,15 @@ int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, s
 
     cJSON_AddItemToObject(json, "addresses", addresses_array);
 
+    /* Add additional fields */
+    cJSON_AddStringToObject(json, "daokeappuk", data->daokeappuk);
+    cJSON_AddStringToObject(json, "daokeenv", data->daokeenv);
+    cJSON_AddStringToObject(json, "instanceid", data->instanceid);
+    cJSON_AddStringToObject(json, "daokeip", data->daokeip);
+    cJSON_AddStringToObject(json, "comm", data->comm);
+    cJSON_AddStringToObject(json, "cmdline", data->cmdline);
+    cJSON_AddNumberToObject(json, "cap", data->cap);
+
     /* Print JSON to string */
     json_str = cJSON_PrintUnformatted(json);
     if (!json_str) {

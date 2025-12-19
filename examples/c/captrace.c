@@ -317,6 +317,23 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                     stacktrace.addresses[i] = addrs[i];
                 }
 
+                // 复制环境信息和其他字段
+                strncpy(stacktrace.daokeappuk, envs.daokeappuk, sizeof(stacktrace.daokeappuk) - 1);
+                strncpy(stacktrace.daokeenv, envs.daokeenv, sizeof(stacktrace.daokeenv) - 1);
+                strncpy(stacktrace.instanceid, envs.instanceid, sizeof(stacktrace.instanceid) - 1);
+                strncpy(stacktrace.daokeip, envs.daokeip, sizeof(stacktrace.daokeip) - 1);
+                strncpy(stacktrace.comm, e->comm, sizeof(stacktrace.comm) - 1);
+                strncpy(stacktrace.cmdline, cmdline_display, sizeof(stacktrace.cmdline) - 1);
+                stacktrace.cap = e->cap;
+
+                // 确保字符串以 null 结尾
+                stacktrace.daokeappuk[sizeof(stacktrace.daokeappuk) - 1] = '\0';
+                stacktrace.daokeenv[sizeof(stacktrace.daokeenv) - 1] = '\0';
+                stacktrace.instanceid[sizeof(stacktrace.instanceid) - 1] = '\0';
+                stacktrace.daokeip[sizeof(stacktrace.daokeip) - 1] = '\0';
+                stacktrace.comm[sizeof(stacktrace.comm) - 1] = '\0';
+                stacktrace.cmdline[sizeof(stacktrace.cmdline) - 1] = '\0';
+
                 // 发送堆栈给 Agent
                 if (socket_send_stacktrace(&g_socket, &stacktrace) < 0) {
                     fprintf(stderr, "Failed to send stacktrace\n");
