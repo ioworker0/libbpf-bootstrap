@@ -37,16 +37,8 @@ struct heartbeat_data {
 
 /* Event data structure for captrace */
 struct captrace_event_data {
-    uint32_t pid;
-    uint32_t tid;
     uint32_t cap;
-    uint64_t pid_ns_inum;
     uint32_t reaper_pid;
-    uint64_t net_ns_inum;
-    char daokeappuk[128];
-    char daokeenv[64];
-    char instanceid[128];
-    char daokeip[64];
     char comm[8];
     char cmdline[32];
 };
@@ -56,13 +48,10 @@ struct captrace_event_data {
 struct stacktrace_data {
     uint32_t depth;  /* 实际堆栈深度 */
     uint64_t addresses[MAX_STACK_DEPTH];  /* 堆栈地址数组 */
-    char daokeappuk[128];
-    char daokeenv[64];
-    char instanceid[128];
-    char daokeip[64];
     char comm[8];
     char cmdline[32];
     uint32_t cap;
+    uint32_t reaper_pid;
 };
 
 /* Pack frame header for sending */

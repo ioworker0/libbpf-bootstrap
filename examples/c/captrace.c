@@ -258,35 +258,26 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 
     extract_env_info(e->reaper_pid, &envs); // 只使用 reaper_pid，不做 fallback
 
-    // Skip if DAOKEAPPUK is empty or UNKNOWN
-    if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
-        return 0;
+    // 只有在非 Plux Agent 模式下才检查 DAOKEAPPUK
+    if (!g_enable_plux_agent) {
+        // Skip if DAOKEAPPUK is empty or UNKNOWN
+        if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
+            return 0;
+    }
 
 
     // 发送 event 给 plugin，g_enable_plux_agent = true
     if (g_enable_plux_agent) {
         struct captrace_event_data event_data = {
-            .pid = e->pid,
-            .tid = e->tid,
             .cap = e->cap,
-            .pid_ns_inum = e->pid_ns_inum,
-            .reaper_pid = e->reaper_pid,
-            .net_ns_inum = e->net_ns_inum
+            .reaper_pid = e->reaper_pid
         };
 
         // 复制字符串数据
-        strncpy(event_data.daokeappuk, envs.daokeappuk, sizeof(event_data.daokeappuk) - 1);
-        strncpy(event_data.daokeenv, envs.daokeenv, sizeof(event_data.daokeenv) - 1);
-        strncpy(event_data.instanceid, envs.instanceid, sizeof(event_data.instanceid) - 1);
-        strncpy(event_data.daokeip, envs.daokeip, sizeof(event_data.daokeip) - 1);
         strncpy(event_data.comm, e->comm, sizeof(event_data.comm) - 1);
         strncpy(event_data.cmdline, cmdline_display, sizeof(event_data.cmdline) - 1);
 
         // 确保字符串以 null 结尾
-        event_data.daokeappuk[sizeof(event_data.daokeappuk) - 1] = '\0';
-        event_data.daokeenv[sizeof(event_data.daokeenv) - 1] = '\0';
-        event_data.instanceid[sizeof(event_data.instanceid) - 1] = '\0';
-        event_data.daokeip[sizeof(event_data.daokeip) - 1] = '\0';
         event_data.comm[sizeof(event_data.comm) - 1] = '\0';
         event_data.cmdline[sizeof(event_data.cmdline) - 1] = '\0';
 
@@ -317,20 +308,13 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                     stacktrace.addresses[i] = addrs[i];
                 }
 
-                // 复制环境信息和其他字段
-                strncpy(stacktrace.daokeappuk, envs.daokeappuk, sizeof(stacktrace.daokeappuk) - 1);
-                strncpy(stacktrace.daokeenv, envs.daokeenv, sizeof(stacktrace.daokeenv) - 1);
-                strncpy(stacktrace.instanceid, envs.instanceid, sizeof(stacktrace.instanceid) - 1);
-                strncpy(stacktrace.daokeip, envs.daokeip, sizeof(stacktrace.daokeip) - 1);
+                // 复制其他字段
                 strncpy(stacktrace.comm, e->comm, sizeof(stacktrace.comm) - 1);
                 strncpy(stacktrace.cmdline, cmdline_display, sizeof(stacktrace.cmdline) - 1);
                 stacktrace.cap = e->cap;
+                stacktrace.reaper_pid = e->reaper_pid;
 
                 // 确保字符串以 null 结尾
-                stacktrace.daokeappuk[sizeof(stacktrace.daokeappuk) - 1] = '\0';
-                stacktrace.daokeenv[sizeof(stacktrace.daokeenv) - 1] = '\0';
-                stacktrace.instanceid[sizeof(stacktrace.instanceid) - 1] = '\0';
-                stacktrace.daokeip[sizeof(stacktrace.daokeip) - 1] = '\0';
                 stacktrace.comm[sizeof(stacktrace.comm) - 1] = '\0';
                 stacktrace.cmdline[sizeof(stacktrace.cmdline) - 1] = '\0';
 

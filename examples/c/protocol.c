@@ -73,16 +73,8 @@ int create_captrace_event_json(const struct captrace_event_data *data, char *jso
     }
 
     /* Add fields */
-    cJSON_AddNumberToObject(json, "pid", data->pid);
-    cJSON_AddNumberToObject(json, "tid", data->tid);
     cJSON_AddNumberToObject(json, "cap", data->cap);
-    cJSON_AddNumberToObject(json, "pid_ns_inum", (double)data->pid_ns_inum);
     cJSON_AddNumberToObject(json, "reaper_pid", data->reaper_pid);
-    cJSON_AddNumberToObject(json, "net_ns_inum", (double)data->net_ns_inum);
-    cJSON_AddStringToObject(json, "daokeappuk", data->daokeappuk);
-    cJSON_AddStringToObject(json, "daokeenv", data->daokeenv);
-    cJSON_AddStringToObject(json, "instanceid", data->instanceid);
-    cJSON_AddStringToObject(json, "daokeip", data->daokeip);
     cJSON_AddStringToObject(json, "comm", data->comm);
     cJSON_AddStringToObject(json, "cmdline", data->cmdline);
 
@@ -195,13 +187,10 @@ int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, s
     cJSON_AddItemToObject(json, "addresses", addresses_array);
 
     /* Add additional fields */
-    cJSON_AddStringToObject(json, "daokeappuk", data->daokeappuk);
-    cJSON_AddStringToObject(json, "daokeenv", data->daokeenv);
-    cJSON_AddStringToObject(json, "instanceid", data->instanceid);
-    cJSON_AddStringToObject(json, "daokeip", data->daokeip);
     cJSON_AddStringToObject(json, "comm", data->comm);
     cJSON_AddStringToObject(json, "cmdline", data->cmdline);
     cJSON_AddNumberToObject(json, "cap", data->cap);
+    cJSON_AddNumberToObject(json, "reaper_pid", data->reaper_pid);
 
     /* Print JSON to string */
     json_str = cJSON_PrintUnformatted(json);
