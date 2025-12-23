@@ -44,7 +44,7 @@ int socket_connect(struct socket_protocol *sp)
     /* Create socket */
     sp->socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sp->socket_fd < 0) {
-        perror("socket");
+        fprintf(stderr, "[ERROR] socket() failed: %s\n", strerror(errno));
         return -1;
     }
 
@@ -55,7 +55,7 @@ int socket_connect(struct socket_protocol *sp)
 
     /* Connect to socket */
     if (connect(sp->socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("connect");
+        fprintf(stderr, "[ERROR] connect() failed: %s\n", strerror(errno));
         close(sp->socket_fd);
         sp->socket_fd = -1;
         return -1;
@@ -95,7 +95,7 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
     /* Send header */
     sent = send(sp->socket_fd, &header, sizeof(header), 0);
     if (sent != sizeof(header)) {
-        perror("send header");
+        fprintf(stderr, "[ERROR] send header failed: %s\n", strerror(errno));
         return -1;
     }
 
@@ -103,7 +103,7 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
     if (data && data_len > 0) {
         sent = send(sp->socket_fd, data, data_len, 0);
         if (sent != (ssize_t)data_len) {
-            perror("send data");
+            fprintf(stderr, "[ERROR] send data failed: %s\n", strerror(errno));
             return -1;
         }
     }
@@ -130,7 +130,7 @@ int socket_send_handshake(struct socket_protocol *sp)
     /* Create JSON */
     err = create_handshake_json(&handshake, json_buf, sizeof(json_buf));
     if (err < 0) {
-        fprintf(stderr, "Failed to create handshake JSON: %d\n", err);
+        fprintf(stderr, "[ERROR] Failed to create handshake JSON: %d\n", err);
         return err;
     }
 
@@ -156,7 +156,7 @@ int socket_send_heartbeat(struct socket_protocol *sp)
     /* Create JSON */
     err = create_heartbeat_json(&heartbeat, json_buf, sizeof(json_buf));
     if (err < 0) {
-        fprintf(stderr, "Failed to create heartbeat JSON: %d\n", err);
+        fprintf(stderr, "[ERROR] Failed to create heartbeat JSON: %d\n", err);
         return err;
     }
 
@@ -182,7 +182,7 @@ static void *heartbeat_thread_func(void *arg)
         }
 
         if (socket_send_heartbeat(sp) < 0) {
-            fprintf(stderr, "Failed to send heartbeat\n");
+            fprintf(stderr, "[ERROR] Failed to send heartbeat\n");
             /* Continue trying, don't exit thread */
         }
     }
@@ -204,7 +204,7 @@ int socket_start_heartbeat(struct socket_protocol *sp)
     sp->running = true;
 
     if (pthread_create(&sp->heartbeat_thread, NULL, heartbeat_thread_func, sp) != 0) {
-        perror("pthread_create");
+        fprintf(stderr, "[ERROR] pthread_create() failed: %s\n", strerror(errno));
         sp->running = false;
         return -1;
     }
@@ -260,7 +260,7 @@ int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_d
     /* Create JSON */
     ret = create_stacktrace_json(stacktrace, json_buf, sizeof(json_buf));
     if (ret < 0) {
-        fprintf(stderr, "Failed to create stacktrace JSON\n");
+        fprintf(stderr, "[ERROR] Failed to create stacktrace JSON\n");
         return ret;
     }
 
