@@ -90,7 +90,7 @@ int init_plux_agent(int argc, char **argv);
 
 static volatile bool exiting = false;
 static void handle_signal(int sig) { 
-    fprintf(stderr, "[SIGNAL] Received signal %d (%s), setting exiting flag\n", 
+    fprintf(stderr, "[SIGNAL][ERROR] Received signal %d (%s), setting exiting flag\n",
             sig, sig == SIGINT ? "SIGINT" : (sig == SIGTERM ? "SIGTERM" : "UNKNOWN"));
     exiting = true; 
 }
@@ -336,7 +336,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         }
     } else {
         // 原有的打印逻辑
-        printf("%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %-8s %-32s\n",
+        fprintf(stderr, "%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %-8s %-32s\n",
                e->pid,
                e->tid,
                e->cap,
@@ -355,10 +355,10 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             unsigned long addrs[127] = {0};
             int key = e->stack_id;
             if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
-                printf("  stack_id=%d\n", e->stack_id);
+                fprintf(stderr, "  stack_id=%d\n", e->stack_id);
                 for (int i = 0; i < 127; i++) {
                     if (!addrs[i]) break;
-                    printf("    [%02d] [<%016lx>] %s\n", i, addrs[i], resolve_kernel_symbol(addrs[i]));
+                    fprintf(stderr, "    [%02d] [<%016lx>] %s\n", i, addrs[i], resolve_kernel_symbol(addrs[i]));
                 }
             }
         }
@@ -434,11 +434,11 @@ int main(int argc, char **argv)
     }
     if (err < 0) {
         fprintf(stderr, "Failed to initialize Plux Agent (continuing without Agent): %d\n", err);
-        printf("Running in standalone mode - no Plux Agent connection\n");
+        fprintf(stderr, "Running in standalone mode - no Plux Agent connection\n");
         // 注意：这里不退出，即使 Agent 初始化失败也继续运行
     } else {
-        printf("Plux Agent connection established successfully!\n");
-        printf("Listening for capability events and sending to Agent...\n");
+        fprintf(stderr, "Plux Agent connection established successfully!\n");
+        fprintf(stderr, "Listening for capability events and sending to Agent...\n");
     }
 
     signal(SIGINT, handle_signal);
@@ -448,11 +448,11 @@ int main(int argc, char **argv)
     libbpf_set_print(libbpf_print_fn);
 
     if (access(btf_path, R_OK) == 0) {
-        printf("Found custom BTF at %s, using it.\n", btf_path);
+        fprintf(stderr, "Found custom BTF at %s, using it.\n", btf_path);
         LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
         skel = captrace_bpf__open_opts(&opts);
     } else {
-        printf("Custom BTF not found at %s. Letting libbpf find one automatically.\n", btf_path);
+        fprintf(stderr, "Custom BTF not found at %s. Letting libbpf find one automatically.\n", btf_path);
         skel = captrace_bpf__open();
     }
     if (!skel) {
@@ -470,9 +470,9 @@ int main(int argc, char **argv)
     // 获取当前进程网络命名空间 inode，并传给 BPF 端用于过滤
     unsigned long long self_netns = get_self_netns_inum();
     if (self_netns)
-        printf("Setting filter_net_ns_inum to current netns inode: %llu\n", self_netns);
+        fprintf(stderr, "Setting filter_net_ns_inum to current netns inode: %llu\n", self_netns);
     else
-        printf("Could not determine current netns inode, leaving filter_net_ns_inum=0 (no filtering).\n");
+        fprintf(stderr, "Could not determine current netns inode, leaving filter_net_ns_inum=0 (no filtering).\n");
     if (skel->rodata && self_netns)
         skel->rodata->filter_net_ns_inum = self_netns;
 
@@ -510,8 +510,8 @@ int main(int argc, char **argv)
     }
     fprintf(stderr, "[INFO] Ring buffer created successfully\n");
 
-    printf("Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
-    printf("%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %-8s %-32s\n",
+    fprintf(stderr, "[INFO] Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
+    fprintf(stderr, "%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %-8s %-32s\n",
            "PID", "TID", "CAP", "CAP_NAME", "PID_NS_INUM", "INITPID", "NETNS_INUM",
            "DAOKEAPPUK", "DAOKEENV", "INSTANCEID", "DAOKEIP", "COMM", "CMDLINE");
 
@@ -527,19 +527,19 @@ int main(int argc, char **argv)
             break;
         }
     }
-    fprintf(stderr, "[INFO] Exited main loop (exiting=%d, err=%d)\n", exiting, err);
+    fprintf(stderr, "[ERROR] Exited main loop (exiting=%d, err=%d)\n", exiting, err);
 
 cleanup:
-    fprintf(stderr, "[INFO] Entering cleanup (exiting=%d, err=%d)\n", exiting, err);
+    fprintf(stderr, "[ERROR] Entering cleanup (exiting=%d, err=%d)\n", exiting, err);
     
-    fprintf(stderr, "[INFO] Freeing ring buffer...\n");
+    fprintf(stderr, "[ERROR] Freeing ring buffer...\n");
     ring_buffer__free(rb);
     
-    fprintf(stderr, "[INFO] Destroying BPF skeleton...\n");
+    fprintf(stderr, "[ERROR] Destroying BPF skeleton...\n");
     captrace_bpf__destroy(skel);
 
     int exit_code = err < 0 ? -err : 0;
-    fprintf(stderr, "[INFO] Cleanup completed, exiting with code: %d\n", exit_code);
+    fprintf(stderr, "[ERROR] Cleanup completed, exiting with code: %d\n", exit_code);
     return exit_code;
 }
 
@@ -550,12 +550,12 @@ int init_plux_agent(int argc, char **argv)
 {
     int err;
 
-    printf("=== Initializing Plux Agent connection ===\n");
+    fprintf(stderr, "=== Initializing Plux Agent connection ===\n");
 
     // 初始化配置
     init_plugin_config(&g_config);
     strncpy(g_config.plugin_name, "plux-ebpf-captrace", sizeof(g_config.plugin_name) - 1);
-    printf("Plugin name: %s\n", g_config.plugin_name);
+    fprintf(stderr, "Plugin name: %s\n", g_config.plugin_name);
 
     // 解析命令行配置
     err = parse_config_args(argc, argv, &g_config);
@@ -566,16 +566,16 @@ int init_plux_agent(int argc, char **argv)
 
     // 检查是否提供了 socket_path
     if (strlen(g_config.socket_path) == 0) {
-        printf("No socket_path provided in config, running without Plux Agent\n");
-        printf("Use: --config '{\"socket_path\":\"/path/to/socket\"}' to enable Agent\n");
+        fprintf(stderr, "No socket_path provided in config, running without Plux Agent\n");
+        fprintf(stderr, "Use: --config '{\"socket_path\":\"/path/to/socket\"}' to enable Agent\n");
         g_enable_plux_agent = false;
         return 0;
     }
 
-    printf("Target socket path: %s\n", g_config.socket_path);
-    printf("Debug mode: %s\n", g_config.debug_mode ? "enabled" : "disabled");
-    printf("Heartbeat interval: %d seconds\n", g_config.heartbeat_interval);
-    printf("Stack capture: %s\n", g_config.stack ? "enabled" : "disabled");
+    fprintf(stderr, "Target socket path: %s\n", g_config.socket_path);
+    fprintf(stderr, "Debug mode: %s\n", g_config.debug_mode ? "enabled" : "disabled");
+    fprintf(stderr, "Heartbeat interval: %d seconds\n", g_config.heartbeat_interval);
+    fprintf(stderr, "Stack capture: %s\n", g_config.stack ? "enabled" : "disabled");
 
     // 检查 socket 文件是否存在
     err = check_socket_file(g_config.socket_path);
@@ -583,7 +583,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Socket file not accessible: %s (error: %d)\n", g_config.socket_path, err);
         return err;
     }
-    printf("Socket file exists and is accessible\n");
+    fprintf(stderr, "Socket file exists and is accessible\n");
 
     // 初始化 socket 协议
     err = init_socket_protocol(&g_socket, &g_config);
@@ -591,7 +591,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to init socket protocol: %d\n", err);
         return err;
     }
-    printf("Socket protocol initialized\n");
+    fprintf(stderr, "Socket protocol initialized\n");
 
     // 连接到 Agent
     err = socket_connect(&g_socket);
@@ -599,7 +599,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to connect to Plux Agent: %d\n", err);
         return err;
     }
-    printf("Connected to Plux Agent\n");
+    fprintf(stderr, "Connected to Plux Agent\n");
 
     // 发送握手
     err = socket_send_handshake(&g_socket);
@@ -607,7 +607,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to send handshake: %d\n", err);
         return err;
     }
-    printf("Handshake sent successfully\n");
+    fprintf(stderr, "Handshake sent successfully\n");
 
     // 启动心跳
     err = socket_start_heartbeat(&g_socket);
@@ -615,7 +615,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to start heartbeat: %d\n", err);
         return err;
     }
-    printf("Heartbeat thread started (%d second interval)\n", g_config.heartbeat_interval);
+    fprintf(stderr, "Heartbeat thread started (%d second interval)\n", g_config.heartbeat_interval);
 
     // 发送 info 日志：socket_path 已获取
     char log_msg[256];
@@ -625,7 +625,7 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to send info log: %d\n", err);
         // 不返回错误，继续执行
     } else {
-        printf("Info log sent: %s\n", log_msg);
+        fprintf(stderr, "Info log sent: %s\n", log_msg);
     }
 
     // 发送 info 日志：stack 配置
@@ -636,10 +636,10 @@ int init_plux_agent(int argc, char **argv)
         fprintf(stderr, "Failed to send stack config log: %d\n", err);
         // 不返回错误，继续执行
     } else {
-        printf("Info log sent: %s\n", log_msg);
+        fprintf(stderr, "Info log sent: %s\n", log_msg);
     }
 
-    printf("=== Plux Agent connection established ===\n");
+    fprintf(stderr, "=== Plux Agent connection established ===\n");
     g_enable_plux_agent = true;
     return 0;
 }
