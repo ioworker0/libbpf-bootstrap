@@ -89,7 +89,11 @@ static bool g_enable_plux_agent = false;
 int init_plux_agent(int argc, char **argv);
 
 static volatile bool exiting = false;
-static void handle_signal(int sig) { (void)sig; exiting = true; }
+static void handle_signal(int sig) { 
+    fprintf(stderr, "[SIGNAL] Received signal %d (%s), setting exiting flag\n", 
+            sig, sig == SIGINT ? "SIGINT" : (sig == SIGTERM ? "SIGTERM" : "UNKNOWN"));
+    exiting = true; 
+}
 
 // 若同一 pid 同一 cap 在 60 秒内再次出现则抑制；pid 变化时重置该 bucket。
 #define PID_CACHE_BUCKETS 2048
@@ -286,7 +290,12 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         int ret = create_captrace_event_json(&event_data, json_buf, sizeof(json_buf));
         if (ret > 0) {
             // 发送事件给 Agent
-            socket_send_event(&g_socket, json_buf, ret);
+            if (socket_send_event(&g_socket, json_buf, ret) < 0) {
+                fprintf(stderr, "[ERROR] Failed to send event to Agent (errno: %d, %s)\n",
+                        errno, strerror(errno));
+            }
+        } else {
+            fprintf(stderr, "[ERROR] Failed to create event JSON, ret=%d\n", ret);
         }
 
         // 如果配置了 stack 且有堆栈数据，发送堆栈信息
@@ -320,7 +329,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 
                 // 发送堆栈给 Agent
                 if (socket_send_stacktrace(&g_socket, &stacktrace) < 0) {
-                    fprintf(stderr, "Failed to send stacktrace\n");
+                    fprintf(stderr, "[ERROR] Failed to send stacktrace (depth=%u, errno: %d, %s)\n", 
+                            depth, errno, strerror(errno));
                 }
             }
         }
@@ -466,16 +476,23 @@ int main(int argc, char **argv)
     if (skel->rodata && self_netns)
         skel->rodata->filter_net_ns_inum = self_netns;
 
+    fprintf(stderr, "[INFO] Loading BPF skeleton...\n");
     err = captrace_bpf__load(skel);
     if (err) {
-        fprintf(stderr, "Failed to load skeleton: %d\n", err);
+        fprintf(stderr, "[ERROR] Failed to load skeleton: %d (errno: %d, %s)\n", 
+                err, errno, strerror(errno));
         goto cleanup;
     }
+    fprintf(stderr, "[INFO] BPF skeleton loaded successfully\n");
+
+    fprintf(stderr, "[INFO] Attaching BPF programs...\n");
     err = captrace_bpf__attach(skel);
     if (err) {
-        fprintf(stderr, "Failed to attach: %d\n", err);
+        fprintf(stderr, "[ERROR] Failed to attach BPF programs: %d (errno: %d, %s)\n", 
+                err, errno, strerror(errno));
         goto cleanup;
     }
+    fprintf(stderr, "[INFO] BPF programs attached successfully\n");
 
     // 记录栈 map fd
     // - Standalone 模式 + opt_stack：需要用于打印和符号解析
@@ -483,11 +500,15 @@ int main(int argc, char **argv)
     if (should_capture_stack)
         stack_fd = bpf_map__fd(skel->maps.stack_traces);
 
+    fprintf(stderr, "[INFO] Creating ring buffer...\n");
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
-        fprintf(stderr, "Failed to create ring buffer\n");
-        err = 1; goto cleanup;
+        fprintf(stderr, "[ERROR] Failed to create ring buffer (errno: %d, %s)\n", 
+                errno, strerror(errno));
+        err = 1; 
+        goto cleanup;
     }
+    fprintf(stderr, "[INFO] Ring buffer created successfully\n");
 
     printf("Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
     printf("%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %-8s %-32s\n",
@@ -497,19 +518,29 @@ int main(int argc, char **argv)
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    fprintf(stderr, "[INFO] Entering main event loop (poll interval: 100ms)\n");
     while (!exiting) {
         err = ring_buffer__poll(rb, 100); // 100ms
         if (err < 0) {
-            fprintf(stderr, "Polling error: %d\n", err);
+            fprintf(stderr, "[ERROR] Ring buffer polling error: %d (errno: %d, %s)\n", 
+                    err, errno, strerror(errno));
             break;
         }
     }
+    fprintf(stderr, "[INFO] Exited main loop (exiting=%d, err=%d)\n", exiting, err);
 
 cleanup:
+    fprintf(stderr, "[INFO] Entering cleanup (exiting=%d, err=%d)\n", exiting, err);
+    
+    fprintf(stderr, "[INFO] Freeing ring buffer...\n");
     ring_buffer__free(rb);
+    
+    fprintf(stderr, "[INFO] Destroying BPF skeleton...\n");
     captrace_bpf__destroy(skel);
 
-    return err < 0 ? -err : 0;
+    int exit_code = err < 0 ? -err : 0;
+    fprintf(stderr, "[INFO] Cleanup completed, exiting with code: %d\n", exit_code);
+    return exit_code;
 }
 
 // 配置解析相关函数
