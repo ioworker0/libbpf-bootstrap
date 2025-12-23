@@ -20,6 +20,9 @@ struct socket_protocol {
     /* Heartbeat thread */
     pthread_t heartbeat_thread;
     volatile bool running;
+
+    /* Send mutex to protect concurrent socket writes */
+    pthread_mutex_t send_mutex;
 };
 
 /* Socket protocol management functions */

@@ -29,6 +29,12 @@ int init_socket_protocol(struct socket_protocol *sp, const struct plugin_config 
     sp->socket_fd = -1;
     sp->running = false;
 
+    /* Initialize send mutex */
+    if (pthread_mutex_init(&sp->send_mutex, NULL) != 0) {
+        fprintf(stderr, "[ERROR] Failed to initialize send_mutex: %s\n", strerror(errno));
+        return -1;
+    }
+
     return 0;
 }
 
@@ -76,6 +82,9 @@ int socket_disconnect(struct socket_protocol *sp)
         sp->socket_fd = -1;
     }
 
+    /* Destroy send mutex */
+    pthread_mutex_destroy(&sp->send_mutex);
+
     return 0;
 }
 
@@ -84,10 +93,14 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
 {
     struct frame_header header;
     ssize_t sent;
+    int ret = 0;
 
     if (!sp || sp->socket_fd < 0) {
         return -1;
     }
+
+    /* Lock to ensure atomic send of header + data */
+    pthread_mutex_lock(&sp->send_mutex);
 
     /* Pack header */
     pack_frame_header(&header, msg_type, data_len);
@@ -96,7 +109,8 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
     sent = send(sp->socket_fd, &header, sizeof(header), 0);
     if (sent != sizeof(header)) {
         fprintf(stderr, "[ERROR] send header failed: %s\n", strerror(errno));
-        return -1;
+        ret = -1;
+        goto unlock;
     }
 
     /* Send data if any */
@@ -104,11 +118,14 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
         sent = send(sp->socket_fd, data, data_len, 0);
         if (sent != (ssize_t)data_len) {
             fprintf(stderr, "[ERROR] send data failed: %s\n", strerror(errno));
-            return -1;
+            ret = -1;
+            goto unlock;
         }
     }
 
-    return 0;
+unlock:
+    pthread_mutex_unlock(&sp->send_mutex);
+    return ret;
 }
 
 /* Send handshake message */
