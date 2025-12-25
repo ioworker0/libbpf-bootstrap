@@ -310,8 +310,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                     depth++;
                 }
 
-                // 填充 stacktrace_data
-                struct stacktrace_data stacktrace;
+                // 填充 stacktrace_data（必须初始化为0，避免未初始化的 addresses 数组元素）
+                struct stacktrace_data stacktrace = {0};
                 stacktrace.depth = depth;
                 for (uint32_t i = 0; i < depth; i++) {
                     stacktrace.addresses[i] = addrs[i];

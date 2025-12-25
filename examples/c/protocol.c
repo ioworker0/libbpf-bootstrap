@@ -174,6 +174,11 @@ int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, s
     }
 
     for (uint32_t i = 0; i < data->depth && i < MAX_STACK_DEPTH; i++) {
+        /* 遇到 0 地址就停止，防止序列化无效数据 */
+        if (data->addresses[i] == 0) {
+            break;
+        }
+        
         char addr_str[32];
         snprintf(addr_str, sizeof(addr_str), "0x%lx", (unsigned long)data->addresses[i]);
         cJSON *addr_item = cJSON_CreateString(addr_str);
