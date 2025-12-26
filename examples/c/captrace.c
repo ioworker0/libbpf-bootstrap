@@ -240,8 +240,6 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     (void)ctx; (void)data_sz;
     const struct event *e = data;
-    const char *name = (e->cap < CAP_MAX) ? cap_names[e->cap] : "UNKNOWN";
-    struct env_info envs;
 
     // 处理 cmdline: 将 \0 替换为空格以便显示
     char cmdline_display[32];
@@ -256,21 +254,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     }
     cmdline_display[sizeof(cmdline_display) - 1] = '\0';
 
-    // pid%n bucket + 窗口内 bitmap 去重
-    if (!g_enable_plux_agent && suppress_by_pid_cache(e->pid, e->cap))
-        return 0;
-
-    extract_env_info(e->reaper_pid, &envs); // 只使用 reaper_pid，不做 fallback
-
-    // 只有在非 Plux Agent 模式下才检查 DAOKEAPPUK
-    if (!g_enable_plux_agent) {
-        // Skip if DAOKEAPPUK is empty or UNKNOWN
-        if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
-            return 0;
-    }
-
-
-    // 发送 event 给 plugin，g_enable_plux_agent = true
+    // Agent 模式：直接发送堆栈，不需要环境变量和去重
     if (g_enable_plux_agent) {
         // ===== 注释掉事件发送，只发送堆栈 =====
         /*
@@ -346,6 +330,20 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             }
         }
     } else {
+        // Standalone 模式：需要环境变量和去重
+        const char *name = (e->cap < CAP_MAX) ? cap_names[e->cap] : "UNKNOWN";
+        struct env_info envs;
+        
+        // pid%n bucket + 窗口内 bitmap 去重
+        if (suppress_by_pid_cache(e->pid, e->cap))
+            return 0;
+
+        extract_env_info(e->reaper_pid, &envs);
+
+        // Skip if DAOKEAPPUK is empty or UNKNOWN
+        if (!envs.daokeappuk[0] || strcmp(envs.daokeappuk, "UNKNOWN") == 0)
+            return 0;
+        
         // 原有的打印逻辑
         fprintf(stderr, "%-6u %-6u %-5u %-24s %-12llu %-8u %-12llu %-20s %-10s %-24s %-15s %-8s %-32s\n",
                e->pid,
