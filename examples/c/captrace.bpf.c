@@ -142,6 +142,7 @@ static __always_inline int record_cap(int cap, int stack_id)
 SEC("kprobe/ns_capable")
 int BPF_KPROBE(handle_ns_capable, void *ignored_ns, int cap)
 {
+    return 0; // 暂时跳过，最终都会调用 security_capable
     int sid = -1;
     if (capture_stack)
         sid = bpf_get_stackid(ctx, &stack_traces, BPF_F_REUSE_STACKID);
@@ -162,6 +163,7 @@ int BPF_KPROBE(handle_security_capable, const struct cred *cred, struct user_nam
 SEC("kprobe/ns_capable_common")
 int BPF_KPROBE(handle_ns_capable_common, struct user_namespace *ns, int cap, unsigned int opts)
 {
+    return 0; // 暂时跳过，最终都会调用 security_capable
     if (opts & CAP_OPT_NOAUDIT)
         return 0;
     int sid = -1;
