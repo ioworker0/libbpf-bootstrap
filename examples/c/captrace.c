@@ -300,21 +300,28 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 
         // 如果配置了 stack 且有堆栈数据，发送堆栈信息
         if (g_config.stack && e->stack_id >= 0 && stack_fd >= 0) {
-            unsigned long addrs[127] = {0};
+            unsigned long addrs[MAX_STACK_DEPTH];  // 不初始化，bpf_map_lookup_elem 会填充
             int key = e->stack_id;
             if (bpf_map_lookup_elem(stack_fd, &key, addrs) == 0) {
-                // 统计实际深度
+                // 统计实际深度（限制在 MAX_STACK_DEPTH 内）
                 uint32_t depth = 0;
-                for (int i = 0; i < 127; i++) {
+                for (int i = 0; i < MAX_STACK_DEPTH; i++) {
                     if (!addrs[i]) break;
                     depth++;
                 }
 
-                // 填充 stacktrace_data（必须初始化为0，避免未初始化的 addresses 数组元素）
-                struct stacktrace_data stacktrace = {0};
+                // 填充 stacktrace_data（不需要完全初始化，protocol.c 会在遇到 0 时停止）
+                struct stacktrace_data stacktrace;
                 stacktrace.depth = depth;
-                for (uint32_t i = 0; i < depth; i++) {
+                
+                // 复制有效地址
+                for (uint32_t i = 0; i < depth && i < MAX_STACK_DEPTH; i++) {
                     stacktrace.addresses[i] = addrs[i];
+                }
+                
+                // 设置终止标记：在最后一个有效地址后面放一个 0
+                if (depth < MAX_STACK_DEPTH) {
+                    stacktrace.addresses[depth] = 0;
                 }
 
                 // 复制其他字段

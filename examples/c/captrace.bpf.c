@@ -32,8 +32,8 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
     __uint(key_size, sizeof(__u32));
-    __uint(value_size, sizeof(__u64) * 127);  // 每个堆栈 127 个地址，约 1KB
-    __uint(max_entries, 32768);  // 最多 32768 个不同堆栈，约 32MB 内存
+    __uint(value_size, sizeof(__u64) * 32);  // 每个堆栈 32 个地址，约 256 字节
+    __uint(max_entries, 32768);  // 最多 32768 个不同堆栈，约 8MB 内存
 } stack_traces SEC(".maps");
 
 struct last_key {
