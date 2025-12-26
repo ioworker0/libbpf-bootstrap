@@ -272,6 +272,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 
     // 发送 event 给 plugin，g_enable_plux_agent = true
     if (g_enable_plux_agent) {
+        // ===== 注释掉事件发送，只发送堆栈 =====
+        /*
         struct captrace_event_data event_data = {
             .cap = e->cap,
             .reaper_pid = e->reaper_pid
@@ -297,6 +299,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         } else {
             fprintf(stderr, "[ERROR] Failed to create event JSON, ret=%d\n", ret);
         }
+        */
+        // ===== 注释结束 =====
 
         // 如果配置了 stack 且有堆栈数据，发送堆栈信息
         if (g_config.stack && e->stack_id >= 0 && stack_fd >= 0) {
