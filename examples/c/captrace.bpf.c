@@ -11,6 +11,26 @@
 const volatile __u64 filter_net_ns_inum = 0; // 0: 不过滤
 const volatile bool capture_stack = false;   // 是否采集堆栈 (由用户态设置)
 
+// Capability 过滤 bitmap: bit=1 表示**忽略**该 capability
+// 默认忽略噪音较多的 capability（对应 Go 端的 defaultCapabilities）
+const volatile __u64 ignored_caps_bitmap = 
+    (1ULL << 0)  | // CAP_CHOWN
+    (1ULL << 1)  | // CAP_DAC_OVERRIDE
+    (1ULL << 2)  | // CAP_DAC_READ_SEARCH
+    (1ULL << 3)  | // CAP_FOWNER
+    (1ULL << 4)  | // CAP_FSETID
+    (1ULL << 5)  | // CAP_KILL
+    (1ULL << 6)  | // CAP_SETGID
+    (1ULL << 7)  | // CAP_SETUID
+    (1ULL << 8)  | // CAP_SETPCAP
+    (1ULL << 10) | // CAP_NET_BIND_SERVICE
+    (1ULL << 13) | // CAP_NET_RAW
+    (1ULL << 18) | // CAP_SYS_CHROOT
+    (1ULL << 23) | // CAP_SYS_NICE
+    (1ULL << 27) | // CAP_MKNOD
+    (1ULL << 29) | // CAP_AUDIT_WRITE
+    (1ULL << 31);  // CAP_SETFCAP
+
 struct event {
     __u32 pid;
     __u32 tid;
@@ -51,6 +71,14 @@ struct {
 // 公共逻辑: 采集 task -> nsproxy -> {net_ns, pid_ns_for_children} , 做过滤并提交事件
 static __always_inline int record_cap(int cap, int stack_id)
 {
+    // 过滤: 检查该 capability 是否在忽略列表中
+    if (cap >= 0 && cap < 64) {
+        __u64 mask = 1ULL << cap;
+        if (ignored_caps_bitmap & mask) {
+            return 0;  // 忽略该 capability
+        }
+    }
+    
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     struct nsproxy *nsp = BPF_CORE_READ(task, nsproxy);
 
