@@ -16,7 +16,7 @@ const volatile bool capture_stack = false;   // 是否采集堆栈 (由用户态
 const volatile __u64 ignored_caps_bitmap = 
     (1ULL << 0)  | // CAP_CHOWN
     (1ULL << 1)  | // CAP_DAC_OVERRIDE
-    (1ULL << 2)  | // CAP_DAC_READ_SEARCH
+//    (1ULL << 2)  | // CAP_DAC_READ_SEARCH
     (1ULL << 3)  | // CAP_FOWNER
     (1ULL << 4)  | // CAP_FSETID
     (1ULL << 5)  | // CAP_KILL
@@ -26,7 +26,7 @@ const volatile __u64 ignored_caps_bitmap =
     (1ULL << 10) | // CAP_NET_BIND_SERVICE
     (1ULL << 13) | // CAP_NET_RAW
     (1ULL << 18) | // CAP_SYS_CHROOT
-    (1ULL << 23) | // CAP_SYS_NICE
+//    (1ULL << 23) | // CAP_SYS_NICE
     (1ULL << 27) | // CAP_MKNOD
     (1ULL << 29) | // CAP_AUDIT_WRITE
     (1ULL << 31);  // CAP_SETFCAP
@@ -72,12 +72,12 @@ struct {
 static __always_inline int record_cap(int cap, int stack_id)
 {
     // 过滤: 检查该 capability 是否在忽略列表中
-//    if (cap >= 0 && cap < 64) {
-//        __u64 mask = 1ULL << cap;
-//        if (ignored_caps_bitmap & mask) {
-//            return 0;  // 忽略该 capability
-//        }
-//    }
+    if (cap >= 0 && cap < 64) {
+        __u64 mask = 1ULL << cap;
+        if (ignored_caps_bitmap & mask) {
+            return 0;  // 忽略该 capability
+        }
+    }
     
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     struct nsproxy *nsp = BPF_CORE_READ(task, nsproxy);
