@@ -72,12 +72,12 @@ struct {
 static __always_inline int record_cap(int cap, int stack_id)
 {
     // 过滤: 检查该 capability 是否在忽略列表中
-    if (cap >= 0 && cap < 64) {
-        __u64 mask = 1ULL << cap;
-        if (ignored_caps_bitmap & mask) {
-            return 0;  // 忽略该 capability
-        }
-    }
+//    if (cap >= 0 && cap < 64) {
+//        __u64 mask = 1ULL << cap;
+//        if (ignored_caps_bitmap & mask) {
+//            return 0;  // 忽略该 capability
+//        }
+//    }
     
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     struct nsproxy *nsp = BPF_CORE_READ(task, nsproxy);
