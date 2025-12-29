@@ -322,7 +322,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                 stacktrace.comm[sizeof(stacktrace.comm) - 1] = '\0';
                 stacktrace.cmdline[sizeof(stacktrace.cmdline) - 1] = '\0';
 
-                // 发送堆栈给 Agent
+                // 发送堆栈给 Agent（已优化：writev 一次发送 header+data）
                 if (socket_send_stacktrace(&g_socket, &stacktrace) < 0) {
                     fprintf(stderr, "[ERROR] Failed to send stacktrace (depth=%u, errno: %d, %s)\n", 
                             depth, errno, strerror(errno));

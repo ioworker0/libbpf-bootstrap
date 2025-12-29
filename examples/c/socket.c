@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include <signal.h>
 #include <time.h>
 #include <pthread.h>
@@ -88,7 +89,7 @@ int socket_disconnect(struct socket_protocol *sp)
     return 0;
 }
 
-/* Send raw message with frame header */
+/* Send raw message with frame header - 优化版：header+data 一次发送 */
 int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const char *data, uint32_t data_len)
 {
     struct frame_header header;
@@ -99,31 +100,35 @@ int socket_send_raw_message(struct socket_protocol *sp, uint16_t msg_type, const
         return -1;
     }
 
-    /* Lock to ensure atomic send of header + data */
+    /* Lock to ensure atomic send */
     pthread_mutex_lock(&sp->send_mutex);
 
     /* Pack header */
     pack_frame_header(&header, msg_type, data_len);
 
-    /* Send header */
-    sent = send(sp->socket_fd, &header, sizeof(header), 0);
-    if (sent != sizeof(header)) {
-        fprintf(stderr, "[ERROR] send header failed: %s\n", strerror(errno));
-        ret = -1;
-        goto unlock;
-    }
-
-    /* Send data if any */
+    /* 优化：使用 writev 一次性发送 header + data，减少系统调用 */
     if (data && data_len > 0) {
-        sent = send(sp->socket_fd, data, data_len, 0);
-        if (sent != (ssize_t)data_len) {
-            fprintf(stderr, "[ERROR] send data failed: %s\n", strerror(errno));
+        struct iovec iov[2];
+        iov[0].iov_base = &header;
+        iov[0].iov_len = sizeof(header);
+        iov[1].iov_base = (void *)data;
+        iov[1].iov_len = data_len;
+        
+        sent = writev(sp->socket_fd, iov, 2);
+        if (sent != (ssize_t)(sizeof(header) + data_len)) {
+            fprintf(stderr, "[ERROR] writev failed: sent=%zd, expected=%zu, error=%s\n",
+                    sent, sizeof(header) + data_len, strerror(errno));
             ret = -1;
-            goto unlock;
+        }
+    } else {
+        /* 无数据，只发送 header */
+        sent = send(sp->socket_fd, &header, sizeof(header), 0);
+        if (sent != sizeof(header)) {
+            fprintf(stderr, "[ERROR] send header failed: %s\n", strerror(errno));
+            ret = -1;
         }
     }
 
-unlock:
     pthread_mutex_unlock(&sp->send_mutex);
     return ret;
 }
