@@ -16,7 +16,7 @@ const volatile bool capture_stack = false;   // 是否采集堆栈 (由用户态
 const volatile __u64 ignored_caps_bitmap = 
     (1ULL << 0)  | // CAP_CHOWN
     (1ULL << 1)  | // CAP_DAC_OVERRIDE
-//    (1ULL << 2)  | // CAP_DAC_READ_SEARCH
+    (1ULL << 2)  | // CAP_DAC_READ_SEARCH
     (1ULL << 3)  | // CAP_FOWNER
     (1ULL << 4)  | // CAP_FSETID
     (1ULL << 5)  | // CAP_KILL
