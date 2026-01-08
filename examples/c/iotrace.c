@@ -31,13 +31,14 @@ struct latency_info {
 
 struct io_data {
 	uint32_t pid;
+	uint32_t tgid;                   // Thread group ID (must match BPF side)
 	uint32_t dev;
+	uint32_t flag;
 	uint64_t fs_write_bytes;
 	uint64_t fs_read_bytes;
 	uint64_t block_write_bytes;
 	uint64_t block_read_bytes;
 	uint64_t inode;
-	uint32_t flag;
 	struct latency_info latency;
 	char comm[16];
 	char filename[64];

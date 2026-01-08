@@ -93,13 +93,14 @@ struct io_start_info {
 // IO data statistics: aggregated complete IO information
 struct io_data {
 	__u32 pid;                      // Process PID
+	__u32 tgid;                     // Thread group ID (process group)
 	__u32 dev;                      // Device number
+	__u32 flag;                     // IOCB flags (for Direct IO detection)
 	__u64 fs_write_bytes;           // Filesystem write bytes
 	__u64 fs_read_bytes;            // Filesystem read bytes
 	__u64 block_write_bytes;        // Block device write bytes
 	__u64 block_read_bytes;         // Block device read bytes
 	__u64 inode;                    // File inode
-	__u32 flag;                     // IOCB flags (for Direct IO detection)
 	struct latency_info latency;    // Latency statistics
 	char comm[TASK_COMM_LEN];       // Process name
 	char filename[DNAME_INLINE_LEN]; // File name
@@ -279,8 +280,9 @@ static __always_inline void init_io_data(struct io_data *entry,
 {
 	__u64 t = bpf_get_current_pid_tgid();
 
-	// Extract process PID
+	// Extract process PID and TGID
 	entry->pid = t >> 32;
+	entry->tgid = t & 0xffffffff;
 
 	// Read process name
 	bpf_get_current_comm(entry->comm, TASK_COMM_LEN);
@@ -446,6 +448,8 @@ int bpf_rq_qos_done(struct pt_regs *ctx)
 		entry->latency.max_d2c = d2c;
 
 	// If new entry, initialize other fields and save to map
+	// Note: Only initialize comm/pid for new entries to preserve the correct
+	// process context from filesystem layer (which captures the real IO initiator)
 	if (entry == &data) {
 		entry->pid = info->pid;
 		entry->dev = info->dev;
@@ -492,10 +496,14 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 	if (!entry)
 		entry = &data;
 
-	// On first access, initialize file path information
+	// On first access from filesystem layer, initialize file path information
+	// Use tgid == 0 to detect if entry was already initialized by filesystem layer
+	// (block layer sets pid/comm but not tgid, only init_io_data() sets tgid)
+	// This matches huatuo's behavior: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L373
 	dentry = BPF_CORE_READ(iocb, ki_filp, f_path.dentry);
 	root_dentry = BPF_CORE_READ(iocb, ki_filp, f_path.mnt, mnt_root);
-	if (entry->pid == 0) {
+	if (entry->tgid == 0) {
+		// First time from filesystem layer, initialize with correct process context
 		init_io_data(entry, root_dentry, dentry, inode);
 		entry->dev = key.dev;
 		entry->inode = key.inode;
@@ -579,7 +587,7 @@ int bpf_filemap_fault(struct pt_regs *ctx)
 		entry = &data;
 
 	// On first access, initialize file path
-	if (entry->pid == 0) {
+	if (entry->tgid == 0) {
 		struct dentry *dentry;
 		struct dentry *root_dentry;
 
@@ -627,7 +635,7 @@ int bpf_anyfs_filemap_page_mkwrite(struct pt_regs *ctx)
 		entry = &data;
 
 	// On first access, initialize file path
-	if (entry->pid == 0) {
+	if (entry->tgid == 0) {
 		struct dentry *dentry;
 		struct dentry *root_dentry;
 
