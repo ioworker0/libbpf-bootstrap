@@ -415,83 +415,100 @@ static int compare_processes(const void *a, const void *b)
 // Dynamic attachment of BPF programs based on kernel availability
 static int attach_bpf_programs(struct iotrace_bpf *skel)
 {
-	int err;
+	struct bpf_link *link;
 	
-	// 1. Block layer hooks - check rq_qos_issue vs __rq_qos_issue
+	// 1. Block layer hooks
+	// The chosen attachment points are rq_qos_issue/rq_qos_done, which were introduced in the 4.19 kernel
+	// and became __rq_qos_issue/__rq_qos_done in the 5.0 kernel.
+	// Reference: https://github.com/ccfos/huatuo/blob/main/cmd/iotracing/iotracing.go#L354-L371
+	
 	bool has_rq_qos_issue = check_kprobe_exists("rq_qos_issue");
 	bool has___rq_qos_issue = check_kprobe_exists("__rq_qos_issue");
 	
+	const char *issue_symbol = NULL;
+	const char *done_symbol = NULL;
+	
 	if (has_rq_qos_issue) {
-		fprintf(stderr, "Attaching to rq_qos_issue...\n");
-		err = bpf_program__attach(skel->progs.rq_qos_issue);
-		if (err < 0) {
-			fprintf(stderr, "Failed to attach rq_qos_issue: %d\n", err);
-			return err;
-		}
+		issue_symbol = "rq_qos_issue";
+		done_symbol = "rq_qos_done";
 	} else if (has___rq_qos_issue) {
-		fprintf(stderr, "Attaching to __rq_qos_issue...\n");
-		err = bpf_program__attach(skel->progs.__rq_qos_issue);
-		if (err < 0) {
-			fprintf(stderr, "Failed to attach __rq_qos_issue: %d\n", err);
-			return err;
-		}
+		issue_symbol = "__rq_qos_issue";
+		done_symbol = "__rq_qos_done";
 	} else {
 		fprintf(stderr, "Neither rq_qos_issue nor __rq_qos_issue found\n");
 		return -ENOENT;
 	}
 	
-	// Attach rq_qos_done (kretprobe has higher priority)
-	err = bpf_program__attach(skel->progs.rq_qos_done_ret);
-	if (err < 0) {
-		fprintf(stderr, "Warning: Failed to attach rq_qos_done_ret: %d, trying rq_qos_done...\n", err);
-		err = bpf_program__attach(skel->progs.rq_qos_done);
-		if (err < 0) {
-			fprintf(stderr, "Failed to attach rq_qos_done: %d\n", err);
-			return err;
-		}
+	// Attach rq_qos_issue
+	fprintf(stderr, "Attaching to %s...\n", issue_symbol);
+	link = bpf_program__attach_kprobe(skel->progs.bpf_rq_qos_issue, false, issue_symbol);
+	if (!link) {
+		fprintf(stderr, "Failed to attach %s\n", issue_symbol);
+		return -1;
+	}
+	
+	// Attach rq_qos_done
+	fprintf(stderr, "Attaching to %s...\n", done_symbol);
+	link = bpf_program__attach_kprobe(skel->progs.bpf_rq_qos_done, false, done_symbol);
+	if (!link) {
+		fprintf(stderr, "Failed to attach %s\n", done_symbol);
+		return -1;
 	}
 	
 	// 2. Filesystem hooks - ext4 and xfs
+	// Use the same anyfs BPF program but attach to different kernel symbols
 	bool has_ext4 = is_fs_supported("ext4");
 	bool has_xfs = is_fs_supported("xfs");
 	
 	if (has_ext4) {
 		fprintf(stderr, "Attaching ext4 file IO hooks...\n");
-		err = bpf_program__attach(skel->progs.ext4_file_read_iter);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach ext4_file_read_iter: %d\n", err);
+		
+		// Attach anyfs_file_read_iter to ext4_file_read_iter
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_file_read_iter, false, "ext4_file_read_iter");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach ext4_file_read_iter\n");
 		}
-		err = bpf_program__attach(skel->progs.ext4_file_write_iter);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach ext4_file_write_iter: %d\n", err);
+		
+		// Attach anyfs_file_write_iter to ext4_file_write_iter
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_file_write_iter, false, "ext4_file_write_iter");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach ext4_file_write_iter\n");
 		}
-		err = bpf_program__attach(skel->progs.ext4_filemap_page_mkwrite);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach ext4_filemap_page_mkwrite: %d\n", err);
+		
+		// Attach anyfs_filemap_page_mkwrite to ext4_page_mkwrite
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_filemap_page_mkwrite, false, "ext4_page_mkwrite");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach ext4_page_mkwrite\n");
 		}
 	}
 	
 	if (has_xfs) {
 		fprintf(stderr, "Attaching xfs file IO hooks...\n");
-		err = bpf_program__attach(skel->progs.xfs_file_read_iter);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach xfs_file_read_iter: %d\n", err);
+		
+		// Attach anyfs_file_read_iter to xfs_file_read_iter
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_file_read_iter, false, "xfs_file_read_iter");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach xfs_file_read_iter\n");
 		}
-		err = bpf_program__attach(skel->progs.xfs_file_write_iter);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach xfs_file_write_iter: %d\n", err);
+		
+		// Attach anyfs_file_write_iter to xfs_file_write_iter
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_file_write_iter, false, "xfs_file_write_iter");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach xfs_file_write_iter\n");
 		}
-		err = bpf_program__attach(skel->progs.xfs_filemap_page_mkwrite);
-		if (err < 0) {
-			fprintf(stderr, "Warning: Failed to attach xfs_filemap_page_mkwrite: %d\n", err);
+		
+		// Attach anyfs_filemap_page_mkwrite to xfs_filemap_page_mkwrite
+		link = bpf_program__attach_kprobe(skel->progs.bpf_anyfs_filemap_page_mkwrite, false, "xfs_filemap_page_mkwrite");
+		if (!link) {
+			fprintf(stderr, "Warning: Failed to attach xfs_filemap_page_mkwrite\n");
 		}
 	}
 	
 	// 3. Page cache hook (common)
 	fprintf(stderr, "Attaching filemap_fault...\n");
-	err = bpf_program__attach(skel->progs.filemap_fault);
-	if (err < 0) {
-		fprintf(stderr, "Warning: Failed to attach filemap_fault: %d\n", err);
+	link = bpf_program__attach_kprobe(skel->progs.bpf_filemap_fault, false, "filemap_fault");
+	if (!link) {
+		fprintf(stderr, "Warning: Failed to attach filemap_fault\n");
 	}
 	
 	return 0;
@@ -520,6 +537,18 @@ int main(int argc, char **argv)
 {
 	struct iotrace_bpf *skel = NULL;
 	int err;
+	
+	// Declare variable-length arrays at the beginning to avoid goto issues
+	struct io_data data;
+	uint32_t key_pid, key_dev;
+	uint64_t key_inode;
+	int key_size = sizeof(key_pid) + sizeof(key_dev) + sizeof(key_inode);
+	uint8_t key[key_size];
+	uint8_t next_key[key_size];
+	struct process_data processes[1024] = {0};
+	int process_count = 0;
+	bool first = true;
+	int map_fd = -1;
 	
 	// Parse command line arguments (task 2.15)
 	static struct option long_options[] = {
@@ -630,24 +659,16 @@ int main(int argc, char **argv)
 	}
 	
 	// Task 2.10: Read map data and aggregate
-	int map_fd = bpf_map__fd(skel->maps.io_stat);
+	map_fd = bpf_map__fd(skel->maps.io_source_map);
 	if (map_fd < 0) {
-		fprintf(stderr, "Failed to get io_stat map fd\n");
+		fprintf(stderr, "Failed to get io_source_map fd\n");
 		err = -1;
 		goto cleanup;
 	}
 	
-	// Aggregate data by process
-	struct process_data processes[1024] = {0};
-	int process_count = 0;
-	
-	struct io_data data;
-	uint32_t key_pid, key_dev;
-	uint64_t key_inode;
-	int key_size = sizeof(key_pid) + sizeof(key_dev) + sizeof(key_inode);
-	uint8_t key[key_size];
-	uint8_t next_key[key_size];
-	bool first = true;
+	// Reset variables for map iteration
+	first = true;
+	process_count = 0;
 	
 	while (true) {
 		int ret;

@@ -18,6 +18,15 @@ char LICENSE[] SEC("license") = "GPL";
 #define REQ_OP_MASK ((1 << REQ_OP_BITS) - 1)
 #define REQ_OP_READ 0
 #define REQ_OP_WRITE 1
+
+// Define __REQ_META if not present in vmlinux.h
+// This is needed for filtering metadata requests
+#ifndef __REQ_META
+enum {
+	__REQ_META = 12,  // Metadata request flag
+};
+#endif
+
 #define REQ_META (1ULL << __REQ_META)
 
 // Device filter configuration (user-space configurable)
@@ -125,20 +134,100 @@ struct {
 // Kernel Version Compatibility Structures and Functions
 // ============================================================================
 
+// IMPORTANT: Why do we need to define these structures explicitly?
+//
+// Reference: HUATUO project (https://github.com/ccfos/huatuo)
+// - huatuo's vmlinux_x86.h: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h
+// - Has COMPLETE definitions for kernel structures (e.g., struct request at lines 11754-11812)
+//
+// Our vmlinux.h (from libbpf-bootstrap) has MIXED status:
+//
+// ✅ COMPLETE definitions (can use directly):
+//   - struct bio          (line 14013)
+//   - struct inode        (line 31489)
+//   - struct dentry       (line 23948)
+//   - struct kiocb        (line 33287)
+//   - struct gendisk      (line 29311)
+//   - struct vm_fault     (line 50205)
+//   - struct vm_area_struct (line 50179)
+//   - struct iov_iter     (line 31907, but OLD kernel has 'type', NEW has 'data_source')
+//
+// ❌ FORWARD declarations only (MUST define):
+//   - struct request      (line 31725: "struct request;")
+//   - struct hd_struct    (forward declaration only)
+//   - struct request_queue (line 14271: "struct request_queue;")
+//   - struct block_device (line 14009: "struct block_device;")
+//
+// 🔧 Missing enums (MUST define):
+//   - __REQ_META (not present in our vmlinux.h, but in huatuo's at line 33977)
+//
+// To make BPF_CORE_READ() and bpf_core_field_exists() work, we must provide
+// complete structure definitions with __attribute__((preserve_access_index)).
+// This allows BPF CO-RE to adapt to different kernel versions at runtime.
+
+// Complete struct request definition (for kernels where vmlinux.h has forward declaration only)
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L11754-L11812
+// This matches the kernel's struct request layout
+struct request {
+	struct request_queue *q;
+	struct blk_mq_ctx *mq_ctx;
+	struct blk_mq_hw_ctx *mq_hctx;
+	unsigned int cmd_flags;
+	__u32 rq_flags;
+	int internal_tag;
+	unsigned int __data_len;
+	int tag;
+	__u64 __sector;
+	struct bio *bio;
+	struct bio *biotail;
+	struct list_head queuelist;
+	// ... (omitting union fields not used)
+	struct gendisk *rq_disk;  // Old kernel only (< 5.10)
+	void *part;  // struct hd_struct * or struct block_device *
+	__u64 alloc_time_ns;
+	__u64 start_time_ns;
+	__u64 io_start_time_ns;
+	// ... (omitting remaining fields)
+} __attribute__((preserve_access_index));
+
+// Complete struct hd_struct definition (old kernels < 5.11)
+struct hd_struct {
+	int partno;
+	// ... (omitting other fields)
+} __attribute__((preserve_access_index));
+
 // Compatibility structure for newer kernels (5.10+)
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L124-L126
 // The triple underscore suffix marks this as a compatibility structure
 struct request_queue___new {
 	struct gendisk *disk;
 } __attribute__((preserve_access_index));
 
 // Compatibility structure for newer kernels (5.11+)
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L128-L131
 struct block_device___new {
 	dev_t bd_dev;
 } __attribute__((preserve_access_index));
 
+// Old kernel version: iov_iter has 'type' field (union)
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L8972-L8987
+// huatuo's vmlinux_x86.h shows old kernel (5.4) has 'type' field
+struct iov_iter___old {
+	union {
+		unsigned int type;
+		int __type;  // Alternative field name in some kernels
+	};
+	size_t iov_offset;
+	size_t count;
+} __attribute__((preserve_access_index));
+
 // Compatibility structure for newer kernels (6.4+)
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L383-L391
+// New kernel version: iov_iter has 'data_source' field instead of 'type'
+// Our vmlinux.h (line 31907) shows this newer layout
 struct iov_iter___new {
 	bool data_source;
+	size_t count;
 } __attribute__((preserve_access_index));
 
 // Get request disk (compatible with different kernel versions)
@@ -417,13 +506,14 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 	count = BPF_CORE_READ(from, count);
 
 	// Compatibility handling for different kernel versions of iov_iter structure
-	// Kernel <6.4: uses 'type' field
+	// Kernel <6.4: uses 'type' field (union)
 	// Kernel >=6.4: uses 'data_source' field
-	if (bpf_core_field_exists(from->type)) {
-		type = BPF_CORE_READ(from, type);
+	struct iov_iter___old *from_old = (struct iov_iter___old *)from;
+	struct iov_iter___new *from_new = (struct iov_iter___new *)from;
+	
+	if (bpf_core_field_exists(from_old->type)) {
+		type = BPF_CORE_READ(from_old, type);
 	} else {
-		struct iov_iter___new *from_new;
-		from_new = (struct iov_iter___new *)from;
 		type = BPF_CORE_READ(from_new, data_source);
 	}
 

@@ -25,6 +25,10 @@
 
 ### huatuo iotracing 的特点
 
+**项目地址**: [https://github.com/ccfos/huatuo](https://github.com/ccfos/huatuo)
+
+HUATUO 是由滴滴开源并在 CCF 孵化的云原生操作系统可观测性项目，专注于为复杂的云原生环境提供深入的内核级可观测性。
+
 - ✅ 完整的 IO 追踪实现
 - ✅ 块层钩子(rq_qos_issue/done)进行 issue/done 配对
 - ✅ 文件系统钩子(ext4/xfs_file_read/write_iter)
@@ -32,6 +36,124 @@
 - ✅ 使用 BPF map 进行内核空间数据聚合
 - ✅ 延迟统计(q2c, d2c)
 - ✅ 文件路径提取(3级目录)
+- ✅ **完整的 vmlinux.h 定义**：他们的 `bpf/include/vmlinux_x86.h` 包含了完整的 `struct request` 定义（11754-11812 行），这使得 BPF CO-RE 可以直接使用这些结构体而无需额外定义
+
+### vmlinux.h 差异说明
+
+**重要发现**：我们在实现过程中发现了关键差异，需要**全面向 HUATUO 看齐**。
+
+#### HUATUO 的 vmlinux.h
+
+**项目**: [https://github.com/ccfos/huatuo](https://github.com/ccfos/huatuo)  
+**文件**: [bpf/include/vmlinux_x86.h](https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h)
+
+HUATUO 的 `vmlinux_x86.h` 包含**完整的内核结构体定义**：
+- `struct request`：[第 11754-11812 行](https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L11754-L11812)（59 行完整定义）
+- `struct iov_iter`：[第 8972-8987 行](https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L8972-L8987)（旧内核有 `type` 字段）
+- `__REQ_META` 枚举：[第 33977 行](https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L33977)
+
+#### 我们的 vmlinux.h 状态分析
+
+**文件**: `vmlinux.h/include/x86/vmlinux.h` (from libbpf-bootstrap)
+
+经过全面检查，我们的 vmlinux.h 状态如下：
+
+**✅ 完整定义（可以直接使用）**：
+- `struct bio` (line 14013)
+- `struct inode` (line 31489)
+- `struct dentry` (line 23948)
+- `struct kiocb` (line 33287)
+- `struct gendisk` (line 29311)
+- `struct vm_fault` (line 50205)
+- `struct vm_area_struct` (line 50179)
+- `struct iov_iter` (line 31907) - **但注意**：新内核版本的布局，有 `data_source` 字段而非 `type`
+
+**❌ 仅有前向声明（必须手动定义）**：
+- `struct request` (line 31725: `struct request;`)
+- `struct hd_struct` (前向声明)
+- `struct request_queue` (line 14271: `struct request_queue;`)
+- `struct block_device` (line 14009: `struct block_device;`)
+
+**🔧 缺失的枚举定义**：
+- `__REQ_META` (不存在，需要定义为 12)
+
+#### 我们的解决方案
+
+在 `iotrace.bpf.c` 中，我们显式定义了**所有缺失的结构体和枚举**，并使用 `__attribute__((preserve_access_index))` 来支持 BPF CO-RE。
+
+**1. 定义缺失的枚举**：
+```c
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L33977
+#ifndef __REQ_META
+enum {
+	__REQ_META = 12,  // Metadata request flag
+};
+#endif
+
+#define REQ_META (1ULL << __REQ_META)
+```
+
+**2. 定义完整的 struct request**：
+```c
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L11754-L11812
+struct request {
+    struct request_queue *q;
+    unsigned int cmd_flags;
+    unsigned int __data_len;
+    __u64 __sector;
+    struct bio *bio;
+    struct gendisk *rq_disk;  // Old kernel only
+    void *part;
+    __u64 start_time_ns;
+    __u64 io_start_time_ns;
+    // ... (包含所有需要的字段)
+} __attribute__((preserve_access_index));
+```
+
+**3. 处理 iov_iter 内核版本差异**：
+```c
+// Old kernel (<6.4): has 'type' field
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/include/vmlinux_x86.h#L8972-L8987
+struct iov_iter___old {
+    union {
+        unsigned int type;
+        int __type;
+    };
+    size_t count;
+} __attribute__((preserve_access_index));
+
+// New kernel (>=6.4): has 'data_source' field
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L383-L391
+struct iov_iter___new {
+    bool data_source;
+    size_t count;
+} __attribute__((preserve_access_index));
+```
+
+**4. 其他兼容性结构体**：
+```c
+// Reference: https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L124-L131
+struct request_queue___new {
+    struct gendisk *disk;
+} __attribute__((preserve_access_index));
+
+struct block_device___new {
+    dev_t bd_dev;
+} __attribute__((preserve_access_index));
+
+struct hd_struct {
+    int partno;
+} __attribute__((preserve_access_index));
+```
+
+#### 参考 HUATUO 的兼容性处理
+
+我们的实现**完全参考了 HUATUO 的做法**：
+- **结构体定义策略**：参考 [iotracing.c#L123-L131](https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L123-L131)
+- **CO-RE 字段检测**：参考 [iotracing.c#L137-L147](https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L137-L147)
+- **iov_iter 兼容处理**：参考 [iotracing.c#L383-L391](https://github.com/ccfos/huatuo/blob/main/bpf/iotracing.c#L383-L391)
+
+这种方法确保了代码可以在各种 Linux 发行版和内核版本（4.18 - 6.14+）上编译和运行。
 
 ---
 
