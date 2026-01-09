@@ -34,6 +34,30 @@ enum {
 volatile const __u32 FILTER_DEVS[16] = {};
 volatile const __u32 FILTER_DEV_COUNT = 0;
 
+// Upgrade threshold: 10MB
+volatile const __u64 UPDATE_THRESHOLD = 10ULL * 1024 * 1024;
+
+// Detail statistics map (per-process per-file)
+struct io_key_detail {
+	__u32 pid;
+	__u32 dev;
+	__u64 inode;
+};
+
+struct io_stat {
+	__u64 fs_write_bytes;
+	__u64 fs_read_bytes;
+	__u64 block_write_bytes;
+	__u64 block_read_bytes;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 40960);
+	__uint(key_size, sizeof(struct io_key_detail));
+	__uint(value_size, sizeof(struct io_stat));
+} io_detail_map SEC(".maps");
+
 // Check if device should be processed
 // Returns 1 if device should be processed, 0 if should be filtered out
 static __always_inline int should_process_device(__u32 dev)
@@ -96,6 +120,8 @@ struct io_data {
 	__u32 tgid;                     // Thread group ID (process group)
 	__u32 dev;                      // Device number
 	__u32 flag;                     // IOCB flags (for Direct IO detection)
+	__u8  upgraded;                 // Whether upgraded to major contributor
+	__u8  _pad[3];                  // Padding for alignment
 	__u64 fs_write_bytes;           // Filesystem write bytes
 	__u64 fs_read_bytes;            // Filesystem read bytes
 	__u64 block_write_bytes;        // Block device write bytes
@@ -117,7 +143,7 @@ struct io_data {
 // Maximum 512 entries: ~100 processes × 5 files per process
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 512);
+	__uint(max_entries, 4096);
 	__uint(key_size, sizeof(struct io_key));
 	__uint(value_size, sizeof(struct io_data));
 } io_source_map SEC(".maps");
@@ -308,6 +334,48 @@ static __always_inline void init_io_data(struct io_data *entry,
 	dentry = BPF_CORE_READ(dentry, d_parent);
 	bpf_probe_read_str(entry->d3name, DNAME_INLINE_LEN,
 			   BPF_CORE_READ(dentry, d_name.name));
+}
+
+// Try to upgrade entry to major contributor based on per-process statistics
+// Returns: 1 if upgraded, 0 if not
+static __always_inline int try_upgrade_contributor(struct io_data *entry,
+						   __u32 dev,
+						   __u64 inode,
+						   __u64 count,
+						   bool is_write)
+{
+	if (entry->upgraded)
+		return 0;  // Already upgraded, skip
+	
+	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	__u32 pid = pid_tgid & 0xffffffff;  // Use TGID
+	struct io_key_detail detail_key = {pid, dev, inode};
+	struct io_stat *detail_stat = bpf_map_lookup_elem(&io_detail_map, &detail_key);
+	struct io_stat new_stat = {};
+	
+	if (!detail_stat)
+		detail_stat = &new_stat;
+	
+	if (is_write)
+		detail_stat->fs_write_bytes += count;
+	else
+		detail_stat->fs_read_bytes += count;
+	
+	__u64 current_total = detail_stat->fs_write_bytes + detail_stat->fs_read_bytes;
+	
+	if (detail_stat == &new_stat)
+		bpf_map_update_elem(&io_detail_map, &detail_key, &new_stat, BPF_ANY);
+	
+	// Upgrade if threshold reached
+	if (current_total >= UPDATE_THRESHOLD) {
+		entry->pid = pid;
+		entry->tgid = pid;
+		bpf_get_current_comm(entry->comm, TASK_COMM_LEN);
+		entry->upgraded = 1;
+		return 1;
+	}
+	
+	return 0;
 }
 
 // ============================================================================
@@ -507,6 +575,7 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 		init_io_data(entry, root_dentry, dentry, inode);
 		entry->dev = key.dev;
 		entry->inode = key.inode;
+		entry->upgraded = 0;  // Initialize upgrade flag
 	}
 
 	// Get IO byte count from iov_iter
@@ -533,6 +602,9 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 		entry->fs_write_bytes += count;  // Write
 	else
 		entry->fs_read_bytes += count;   // Read
+
+	// Try to upgrade to major contributor
+	try_upgrade_contributor(entry, key.dev, key.inode, count, type);
 
 	// Save IOCB flags (for Direct IO detection)
 	// 基于不存在同时 Direct + non-Direct 的假设
@@ -598,10 +670,14 @@ int bpf_filemap_fault(struct pt_regs *ctx)
 		init_io_data(entry, root_dentry, dentry, inode);
 		entry->dev = key.dev;
 		entry->inode = key.inode;
+		entry->upgraded = 0;  // Initialize upgrade flag
 	}
 
 	// mmap read is calculated by page, accumulate PAGE_SIZE each time
 	entry->fs_read_bytes += PAGE_SIZE;
+
+	// Try to upgrade to major contributor
+	try_upgrade_contributor(entry, key.dev, key.inode, PAGE_SIZE, false);
 
 	// Update map
 	if (entry == &data)
@@ -646,10 +722,14 @@ int bpf_anyfs_filemap_page_mkwrite(struct pt_regs *ctx)
 		init_io_data(entry, root_dentry, dentry, inode);
 		entry->dev = key.dev;
 		entry->inode = key.inode;
+		entry->upgraded = 0;  // Initialize upgrade flag
 	}
 
 	// mmap write is calculated by page, accumulate PAGE_SIZE each time
 	entry->fs_write_bytes += PAGE_SIZE;
+
+	// Try to upgrade to major contributor
+	try_upgrade_contributor(entry, key.dev, key.inode, PAGE_SIZE, true);
 
 	// Update map
 	if (entry == &data)

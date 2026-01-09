@@ -34,6 +34,8 @@ struct io_data {
 	uint32_t tgid;                   // Thread group ID (must match BPF side)
 	uint32_t dev;
 	uint32_t flag;
+	uint8_t  upgraded;               // Whether upgraded to major contributor
+	uint8_t  _pad[3];                // Padding for alignment
 	uint64_t fs_write_bytes;
 	uint64_t fs_read_bytes;
 	uint64_t block_write_bytes;
