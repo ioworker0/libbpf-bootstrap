@@ -384,6 +384,13 @@ static __always_inline int try_upgrade_contributor(struct io_data *entry,
 				if (len > 32)
 					len = 32;  // Truncate to fit buffer
 				bpf_probe_read_user(entry->cmdline, len, (void *)arg_start);
+				
+				// Replace \0 with space for better display
+				#pragma unroll
+				for (int i = 0; i < 31; i++) {
+					if (entry->cmdline[i] == '\0' && i + 1 < len)
+						entry->cmdline[i] = ' ';
+				}
 			}
 		}
 		

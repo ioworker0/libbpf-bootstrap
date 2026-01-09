@@ -53,7 +53,8 @@ struct io_data {
 // Process aggregated data
 struct process_data {
 	uint32_t pid;
-	char comm[256];  // Full command line
+	char comm[16];       // Process name (short)
+	char cmdline[32];    // Full command line (truncated to 32 bytes)
 	uint64_t fs_read;
 	uint64_t fs_write;
 	uint64_t disk_read;
@@ -332,7 +333,15 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		
 		// Print COMMAND header on first match
 		if (!printed_command) {
-			// Use cmdline if available, otherwise fallback to comm
+			// Prefer cmdline (full command), fallback to comm (process name)
+			const char *cmd = (p->cmdline[0] != '\0') ? p->cmdline : p->comm;
+			printf("COMMAND: %s\n", cmd);
+			printf("-----------------------------------\n");
+			printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
+			printed_command = true;
+		}
+		
+		file_count++;
 			const char *cmd = (data.cmdline[0] != '\0') ? data.cmdline : data.comm;
 			printf("COMMAND: %s\n", cmd);
 			printf("-----------------------------------\n");
@@ -787,8 +796,16 @@ int main(int argc, char **argv)
 			}
 			proc_idx = process_count++;
 			processes[proc_idx].pid = data.pid;
-			// Use comm from BPF side (already correct via try_upgrade_contributor)
 			strncpy(processes[proc_idx].comm, data.comm, sizeof(processes[proc_idx].comm) - 1);
+			processes[proc_idx].cmdline[0] = '\0';  // Initialize as empty
+		}
+		
+		// If this entry is upgraded, update comm and cmdline (overwrite previous)
+		if (data.upgraded) {
+			strncpy(processes[proc_idx].comm, data.comm, sizeof(processes[proc_idx].comm) - 1);
+			if (data.cmdline[0] != '\0') {
+				strncpy(processes[proc_idx].cmdline, data.cmdline, sizeof(processes[proc_idx].cmdline) - 1);
+			}
 		}
 		
 		// Aggregate
