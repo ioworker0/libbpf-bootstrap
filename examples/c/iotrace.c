@@ -342,16 +342,8 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		}
 		
 		file_count++;
-			const char *cmd = (data.cmdline[0] != '\0') ? data.cmdline : data.comm;
-			printf("COMMAND: %s\n", cmd);
-			printf("-----------------------------------\n");
-			printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
-			printed_command = true;
-		}
 		
-		file_count++;
-			
-			// Calculate rates (bytes/sec)
+		// Calculate rates (bytes/sec)
 			uint64_t fs_read = data.fs_read_bytes / duration;
 			uint64_t fs_write = data.fs_write_bytes / duration;
 			uint64_t disk_read = data.block_read_bytes / duration;
