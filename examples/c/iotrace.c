@@ -284,6 +284,71 @@ static void print_process_summary(struct process_data *processes, int count)
 	printf("\n");
 }
 
+// Collect and sort files for a specific PID
+// Returns the number of files collected
+static int collect_and_sort_files(int map_fd, uint32_t pid, struct io_data *files, int max_files)
+{
+	struct io_data data;
+	uint32_t key_pid, key_dev;
+	uint64_t key_inode;
+	int key_size = sizeof(key_pid) + sizeof(key_dev) + sizeof(key_inode);
+	uint8_t key[key_size];
+	uint8_t next_key[key_size];
+	bool first = true;
+	int file_count = 0;
+	
+	// Collect ALL files for this PID (no limit during collection)
+	while (true) {
+		int ret;
+		if (first) {
+			ret = bpf_map_get_next_key(map_fd, NULL, next_key);
+			first = false;
+		} else {
+			ret = bpf_map_get_next_key(map_fd, key, next_key);
+		}
+		
+		if (ret != 0)
+			break;
+		
+		memcpy(key, next_key, key_size);
+		
+		if (bpf_map_lookup_elem(map_fd, key, &data) != 0)
+			continue;
+		
+		if (data.pid != pid)
+			continue;
+		
+		// Stop if we reach max capacity
+		if (file_count >= max_files) {
+			fprintf(stderr, "Warning: PID %u has more than %d files, some will be skipped\n", 
+			        pid, max_files);
+			break;
+		}
+		
+		files[file_count++] = data;
+	}
+	
+	// Sort ALL collected files by weighted IO (descending)
+	for (int i = 0; i < file_count - 1; i++) {
+		for (int j = i + 1; j < file_count; j++) {
+			uint64_t weight_i = calculate_weighted_io(
+				files[i].fs_read_bytes, files[i].fs_write_bytes,
+				files[i].block_read_bytes, files[i].block_write_bytes);
+			uint64_t weight_j = calculate_weighted_io(
+				files[j].fs_read_bytes, files[j].fs_write_bytes,
+				files[j].block_read_bytes, files[j].block_write_bytes);
+			
+			if (weight_j > weight_i) {
+				struct io_data tmp = files[i];
+				files[i] = files[j];
+				files[j] = tmp;
+			}
+		}
+	}
+	
+	return file_count;
+}
+
 // Print file-level details for each process
 static void print_file_details(int map_fd, struct process_data *processes, int count, uint64_t duration)
 {
@@ -298,52 +363,22 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		printf("PID: %-6u  TOTAL_IO: R=%s W=%s  FILES: %lu\n",
 		       p->pid, total_read, total_write, p->file_count);
 		
-		// Re-iterate map to find files for this process
-		struct io_data data;
-		uint32_t key_pid, key_dev;
-		uint64_t key_inode;
-		int key_size = sizeof(key_pid) + sizeof(key_dev) + sizeof(key_inode);
-		uint8_t key[key_size];
-		uint8_t next_key[key_size];
-		bool first = true;
-		int file_count = 0;
-		bool printed_command = false;
+		// Print COMMAND header
+		const char *cmd = (p->cmdline[0] != '\0') ? p->cmdline : p->comm;
+		printf("COMMAND: %s\n", cmd);
+		printf("-----------------------------------\n");
+		printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
 		
-		while (file_count < (int)cfg.max_files_per_process) {
-			int ret;
-			if (first) {
-				ret = bpf_map_get_next_key(map_fd, NULL, next_key);
-				first = false;
-			} else {
-				ret = bpf_map_get_next_key(map_fd, key, next_key);
-			}
-			
-			if (ret != 0)
-				break;
-			
-			memcpy(key, next_key, key_size);
-			
-			// Read value
-			if (bpf_map_lookup_elem(map_fd, key, &data) != 0)
-				continue;
-			
-		// Skip if not for this process
-		if (data.pid != p->pid)
-			continue;
+		// Collect and sort ALL files (up to 1024)
+		struct io_data files[1024];
+		int file_count = collect_and_sort_files(map_fd, p->pid, files, 1024);
 		
-		// Print COMMAND header on first match
-		if (!printed_command) {
-			// Prefer cmdline (full command), fallback to comm (process name)
-			const char *cmd = (p->cmdline[0] != '\0') ? p->cmdline : p->comm;
-			printf("COMMAND: %s\n", cmd);
-			printf("-----------------------------------\n");
-			printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
-			printed_command = true;
-		}
-		
-		file_count++;
-		
-		// Calculate rates (bytes/sec)
+		// Print only top N files (limited by cfg.max_files_per_process)
+		int print_count = file_count < (int)cfg.max_files_per_process ? file_count : (int)cfg.max_files_per_process;
+		for (int f = 0; f < print_count; f++) {
+			struct io_data data = files[f];
+			
+			// Calculate rates (bytes/sec)
 			uint64_t fs_read = data.fs_read_bytes / duration;
 			uint64_t fs_write = data.fs_write_bytes / duration;
 			uint64_t disk_read = data.block_read_bytes / duration;
@@ -400,13 +435,25 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 	}
 }
 
-// Comparison function for sorting processes by total disk IO
+// Calculate weighted total IO with coefficients
+static uint64_t calculate_weighted_io(uint64_t fs_read, uint64_t fs_write,
+                                       uint64_t disk_read, uint64_t disk_write)
+{
+	return fs_read * 1 +      // FS read × 1
+	       fs_write * 2 +     // FS write × 2
+	       disk_read * 10 +   // Disk read × 10
+	       disk_write * 20;   // Disk write × 20
+}
+
+// Comparison function for sorting processes by weighted total IO
 static int compare_processes(const void *a, const void *b)
 {
 	const struct process_data *pa = a;
 	const struct process_data *pb = b;
-	uint64_t total_a = pa->disk_read + pa->disk_write;
-	uint64_t total_b = pb->disk_read + pb->disk_write;
+	uint64_t total_a = calculate_weighted_io(pa->fs_read, pa->fs_write,
+	                                          pa->disk_read, pa->disk_write);
+	uint64_t total_b = calculate_weighted_io(pb->fs_read, pb->fs_write,
+	                                          pb->disk_read, pb->disk_write);
 	
 	if (total_b > total_a)
 		return 1;
@@ -809,6 +856,7 @@ int main(int argc, char **argv)
 	}
 	
 	// Sort by total disk IO
+	// PID 是按照 disk IO 排序
 	qsort(processes, process_count, sizeof(struct process_data), compare_processes);
 	
 	// Task 2.13 + 2.14: Print output
