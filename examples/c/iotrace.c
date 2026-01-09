@@ -43,6 +43,7 @@ struct io_data {
 	uint64_t inode;
 	struct latency_info latency;
 	char comm[16];
+	char cmdline[64];                // Full command line (filled by userspace)
 	char filename[64];
 	char d1name[64];
 	char d2name[64];
@@ -288,12 +289,6 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 	for (int i = 0; i < count && i < (int)cfg.max_processes; i++) {
 		struct process_data *p = &processes[i];
 		
-		// Get full cmdline
-		char cmdline[256];
-		if (!get_proc_cmdline(p->pid, cmdline, sizeof(cmdline))) {
-			strncpy(cmdline, p->comm, sizeof(cmdline) - 1);
-		}
-		
 		char total_read[32], total_write[32];
 		format_bytes(p->fs_read, total_read, sizeof(total_read));
 		format_bytes(p->fs_write, total_write, sizeof(total_write));
@@ -301,9 +296,6 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		printf("===========================================================================\n");
 		printf("PID: %-6u  TOTAL_IO: R=%s W=%s  FILES: %lu\n",
 		       p->pid, total_read, total_write, p->file_count);
-		printf("COMMAND: %s\n", cmdline);
-		printf("-----------------------------------\n");
-		printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
 		
 		// Re-iterate map to find files for this process
 		struct io_data data;
@@ -314,6 +306,7 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		uint8_t next_key[key_size];
 		bool first = true;
 		int file_count = 0;
+		bool printed_command = false;
 		
 		while (file_count < (int)cfg.max_files_per_process) {
 			int ret;
@@ -333,11 +326,21 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 			if (bpf_map_lookup_elem(map_fd, key, &data) != 0)
 				continue;
 			
-			// Skip if not for this process
-			if (data.pid != p->pid)
-				continue;
-			
-			file_count++;
+		// Skip if not for this process
+		if (data.pid != p->pid)
+			continue;
+		
+		// Print COMMAND header on first match
+		if (!printed_command) {
+			// Use cmdline if available, otherwise fallback to comm
+			const char *cmd = (data.cmdline[0] != '\0') ? data.cmdline : data.comm;
+			printf("COMMAND: %s\n", cmd);
+			printf("-----------------------------------\n");
+			printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
+			printed_command = true;
+		}
+		
+		file_count++;
 			
 			// Calculate rates (bytes/sec)
 			uint64_t fs_read = data.fs_read_bytes / duration;
@@ -707,11 +710,8 @@ int main(int argc, char **argv)
 			}
 			proc_idx = process_count++;
 			processes[proc_idx].pid = data.pid;
-			
-			// Task 2.12: Get full cmdline
-			if (!get_proc_cmdline(data.pid, processes[proc_idx].comm, sizeof(processes[proc_idx].comm))) {
-				strncpy(processes[proc_idx].comm, data.comm, sizeof(processes[proc_idx].comm) - 1);
-			}
+			// Use comm from BPF side (already correct via try_upgrade_contributor)
+			strncpy(processes[proc_idx].comm, data.comm, sizeof(processes[proc_idx].comm) - 1);
 		}
 		
 		// Aggregate

@@ -129,6 +129,7 @@ struct io_data {
 	__u64 inode;                    // File inode
 	struct latency_info latency;    // Latency statistics
 	char comm[TASK_COMM_LEN];       // Process name
+	char cmdline[64];               // Full command line (filled by userspace)
 	char filename[DNAME_INLINE_LEN]; // File name
 	char d1name[DNAME_INLINE_LEN];   // Parent directory name
 	char d2name[DNAME_INLINE_LEN];   // Grandparent directory name
@@ -371,6 +372,19 @@ static __always_inline int try_upgrade_contributor(struct io_data *entry,
 		entry->pid = pid;
 		entry->tgid = pid;
 		bpf_get_current_comm(entry->comm, TASK_COMM_LEN);
+		
+		// Try to get cmdline from current task
+		struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+		struct mm_struct *mm = BPF_CORE_READ(task, mm);
+		if (mm) {
+			unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
+			unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
+			unsigned long len = arg_end - arg_start;
+			if (len > 0 && len < 64) {
+				bpf_probe_read_user(entry->cmdline, len, (void *)arg_start);
+			}
+		}
+		
 		entry->upgraded = 1;
 		return 1;
 	}
