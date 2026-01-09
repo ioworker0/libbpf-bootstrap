@@ -10,7 +10,7 @@ char LICENSE[] SEC("license") = "GPL";
 
 // Constants
 #define TASK_COMM_LEN 16
-#define DNAME_INLINE_LEN 64
+#define DNAME_INLINE_LEN 32
 #define PAGE_SIZE 4096
 
 // REQ_OP bits and masks

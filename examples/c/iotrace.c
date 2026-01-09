@@ -44,10 +44,10 @@ struct io_data {
 	struct latency_info latency;
 	char comm[16];
 	char cmdline[32];                // Command line (32 bytes, truncated if needed)
-	char filename[64];
-	char d1name[64];
-	char d2name[64];
-	char d3name[64];
+	char filename[32];               // File name (32 bytes)
+	char d1name[32];                 // Parent directory name (32 bytes)
+	char d2name[32];                 // Grandparent directory name (32 bytes)
+	char d3name[32];                 // Great-grandparent directory name (32 bytes)
 };
 
 // Process aggregated data
