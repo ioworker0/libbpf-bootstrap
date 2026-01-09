@@ -43,7 +43,7 @@ struct io_data {
 	uint64_t inode;
 	struct latency_info latency;
 	char comm[16];
-	char cmdline[64];                // Full command line (filled by userspace)
+	char cmdline[32];                // Command line (32 bytes, truncated if needed)
 	char filename[64];
 	char d1name[64];
 	char d2name[64];

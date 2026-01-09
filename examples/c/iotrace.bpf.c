@@ -128,8 +128,8 @@ struct io_data {
 	__u64 block_read_bytes;         // Block device read bytes
 	__u64 inode;                    // File inode
 	struct latency_info latency;    // Latency statistics
-	char comm[TASK_COMM_LEN];       // Process name
-	char cmdline[64];               // Full command line (filled by userspace)
+	char comm[TASK_COMM_LEN];       // Process name (16 bytes)
+	char cmdline[32];               // Command line (32 bytes, truncated if needed)
 	char filename[DNAME_INLINE_LEN]; // File name
 	char d1name[DNAME_INLINE_LEN];   // Parent directory name
 	char d2name[DNAME_INLINE_LEN];   // Grandparent directory name
@@ -380,7 +380,7 @@ static __always_inline int try_upgrade_contributor(struct io_data *entry,
 			unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
 			unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
 			unsigned long len = arg_end - arg_start;
-			if (len > 0 && len < 64) {
+			if (len > 0 && len < 32) {
 				bpf_probe_read_user(entry->cmdline, len, (void *)arg_start);
 			}
 		}
