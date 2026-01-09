@@ -527,6 +527,7 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 
 	// Determine read/write direction and accumulate bytes
 	// Lowest bit: 0 = read, 1 = write
+	// (存在竞态，但可以接受)
 	type = type & 0x1;
 	if (type)
 		entry->fs_write_bytes += count;  // Write
@@ -534,9 +535,10 @@ static __always_inline int bpf_file_read_write(struct pt_regs *ctx)
 		entry->fs_read_bytes += count;   // Read
 
 	// Save IOCB flags (for Direct IO detection)
+	// 基于不存在同时 Direct + non-Direct 的假设
 	entry->flag = BPF_CORE_READ(iocb, ki_flags);
 
-	// Update map
+	// Update map (存在竞态，但可以接受)
 	if (entry == &data)
 		bpf_map_update_elem(&io_source_map, &key, &data, BPF_ANY);
 
