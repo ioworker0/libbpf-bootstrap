@@ -284,6 +284,16 @@ static void print_process_summary(struct process_data *processes, int count)
 	printf("\n");
 }
 
+// Calculate weighted total IO with coefficients
+static uint64_t calculate_weighted_io(uint64_t fs_read, uint64_t fs_write,
+                                       uint64_t disk_read, uint64_t disk_write)
+{
+	return fs_read * 1 +      // FS read × 1
+	       fs_write * 2 +     // FS write × 2
+	       disk_read * 10 +   // Disk read × 10
+	       disk_write * 20;   // Disk write × 20
+}
+
 // Collect and sort files for a specific PID
 // Returns the number of files collected
 static int collect_and_sort_files(int map_fd, uint32_t pid, struct io_data *files, int max_files)
@@ -433,16 +443,6 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		}
 		printf("\n");
 	}
-}
-
-// Calculate weighted total IO with coefficients
-static uint64_t calculate_weighted_io(uint64_t fs_read, uint64_t fs_write,
-                                       uint64_t disk_read, uint64_t disk_write)
-{
-	return fs_read * 1 +      // FS read × 1
-	       fs_write * 2 +     // FS write × 2
-	       disk_read * 10 +   // Disk read × 10
-	       disk_write * 20;   // Disk write × 20
 }
 
 // Comparison function for sorting processes by weighted total IO
