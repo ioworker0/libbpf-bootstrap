@@ -672,6 +672,83 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 	
+	// Debug: dump io_source_map
+	printf("\n========== DEBUG: io_source_map contents ==========\n");
+	first = true;
+	while (true) {
+		int ret;
+		if (first) {
+			ret = bpf_map_get_next_key(map_fd, NULL, next_key);
+			first = false;
+		} else {
+			ret = bpf_map_get_next_key(map_fd, key, next_key);
+		}
+		if (ret != 0)
+			break;
+		
+		memcpy(key, next_key, key_size);
+		if (bpf_map_lookup_elem(map_fd, key, &data) != 0)
+			continue;
+		
+		memcpy(&key_pid, key, sizeof(key_pid));
+		memcpy(&key_dev, key + sizeof(key_pid), sizeof(key_dev));
+		memcpy(&key_inode, key + sizeof(key_pid) + sizeof(key_dev), sizeof(key_inode));
+		
+		printf("PID=%u DEV=%u:%u INODE=%lu UPGRADED=%u COMM='%s' CMDLINE='%s' FILE='%s'\n",
+		       data.pid, key_dev >> 8, key_dev & 0xff, data.inode,
+		       data.upgraded, data.comm, data.cmdline, data.filename);
+		printf("  IO: fs_read=%lu fs_write=%lu block_read=%lu block_write=%lu\n",
+		       data.fs_read_bytes, data.fs_write_bytes,
+		       data.block_read_bytes, data.block_write_bytes);
+	}
+	
+	// Debug: dump io_detail_map
+	int detail_map_fd = bpf_map__fd(skel->maps.io_detail_map);
+	if (detail_map_fd >= 0) {
+		printf("\n========== DEBUG: io_detail_map contents ==========\n");
+		
+		struct {
+			uint32_t pid;
+			uint32_t dev;
+			uint64_t inode;
+		} detail_key;
+		
+		struct {
+			uint64_t fs_write_bytes;
+			uint64_t fs_read_bytes;
+			uint64_t block_write_bytes;
+			uint64_t block_read_bytes;
+		} detail_stat;
+		
+		uint8_t detail_key_buf[sizeof(detail_key)];
+		uint8_t detail_next_key[sizeof(detail_key)];
+		first = true;
+		
+		while (true) {
+			int ret;
+			if (first) {
+				ret = bpf_map_get_next_key(detail_map_fd, NULL, detail_next_key);
+				first = false;
+			} else {
+				ret = bpf_map_get_next_key(detail_map_fd, detail_key_buf, detail_next_key);
+			}
+			if (ret != 0)
+				break;
+			
+			memcpy(detail_key_buf, detail_next_key, sizeof(detail_key));
+			if (bpf_map_lookup_elem(detail_map_fd, detail_key_buf, &detail_stat) != 0)
+				continue;
+			
+			memcpy(&detail_key, detail_key_buf, sizeof(detail_key));
+			printf("PID=%u DEV=%u:%u INODE=%lu\n",
+			       detail_key.pid, detail_key.dev >> 8, detail_key.dev & 0xff, detail_key.inode);
+			printf("  IO: fs_read=%lu fs_write=%lu total=%lu\n",
+			       detail_stat.fs_read_bytes, detail_stat.fs_write_bytes,
+			       detail_stat.fs_read_bytes + detail_stat.fs_write_bytes);
+		}
+	}
+	printf("===================================================\n\n");
+	
 	// Reset variables for map iteration
 	first = true;
 	process_count = 0;

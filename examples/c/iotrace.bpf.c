@@ -380,7 +380,9 @@ static __always_inline int try_upgrade_contributor(struct io_data *entry,
 			unsigned long arg_start = BPF_CORE_READ(mm, arg_start);
 			unsigned long arg_end = BPF_CORE_READ(mm, arg_end);
 			unsigned long len = arg_end - arg_start;
-			if (len > 0 && len < 32) {
+			if (len > 0) {
+				if (len > 32)
+					len = 32;  // Truncate to fit buffer
 				bpf_probe_read_user(entry->cmdline, len, (void *)arg_start);
 			}
 		}
