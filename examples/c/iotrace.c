@@ -377,7 +377,7 @@ static void print_file_details(int map_fd, struct process_data *processes, int c
 		const char *cmd = (p->cmdline[0] != '\0') ? p->cmdline : p->comm;
 		printf("COMMAND: %s\n", cmd);
 		printf("-----------------------------------\n");
-		printf("DEVICE  FS_READ FS_WRITE DISK_READ DISK_WRITE   LATENCY(μs)      FILE\n");
+		printf("DEVICE  FS_READ/s FS_WRITE/s DISK_READ/s DISK_WRITE/s   LATENCY(μs)      FILE\n");
 		
 		// Collect and sort ALL files (up to 1024)
 		struct io_data files[1024];
