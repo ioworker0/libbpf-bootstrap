@@ -137,10 +137,10 @@ int main(int argc, char **argv)
 		printf("TC qdisc already exists\n");
 	}
 
-	// 设置 TC opts，优先级设为 49153（在 Calico 之后执行）
+	// 设置 TC opts，优先级设为 3（在 Calico 49152 之前执行）
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
 			    .handle = 1,
-			    .priority = 49153,
+			    .priority = 3,
 			    .prog_fd = bpf_program__fd(skel->progs.dscp_marker));
 
 	// Attach 程序到 TC ingress
@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	printf("Successfully attached DSCP marker to %s (priority: 49153, after Calico)\n", ifname);
+	printf("Successfully attached DSCP marker to %s (priority: 3, before Calico)\n", ifname);
 	printf("Marking ALL container egress traffic (veth ingress) with DSCP: 0x%02x\n", dscp_value);
 	printf("Press Ctrl+C to detach and exit...\n");
 	printf("\nYou can verify with: tc filter show dev %s ingress\n", ifname);

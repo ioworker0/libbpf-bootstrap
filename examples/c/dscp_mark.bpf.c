@@ -21,6 +21,15 @@
 // 配置：要设置的 DSCP 值（从用户态配置）
 const volatile __u8 target_dscp = DSCP_EF;  // 默认设置为 EF (最高优先级)
 
+// Cilium style: IPv4 checksum update helper
+static __always_inline int
+ipv4_csum_update_by_value(struct __sk_buff *ctx, int l3_off, __u32 old_val,
+			  __u32 new_val, __u32 len)
+{
+	return bpf_l3_csum_replace(ctx, l3_off + offsetof(struct iphdr, check),
+				   old_val, new_val, len);
+}
+
 SEC("tc")
 int dscp_marker(struct __sk_buff *skb)
 {
@@ -57,14 +66,13 @@ int dscp_marker(struct __sk_buff *skb)
 	if (old_tos == new_tos)
 		return TC_ACT_UNSPEC;
 	
-	// 直接修改 TOS 字段（Cilium 风格）
+	// Cilium style: 直接修改指针
 	ip->tos = new_tos;
 	
-	// 更新 IP 头校验和（Cilium ipv4_csum_update_by_value 风格）
+	// Cilium style: 更新校验和
 	// l3_csum_replace() takes at min 2 bytes, zero extended.
-	if (bpf_l3_csum_replace(skb, l3_off + offsetof(struct iphdr, check),
-				old_tos, new_tos, 2) < 0) {
-		bpf_printk("Failed to update checksum");
+	if (ipv4_csum_update_by_value(skb, l3_off, old_tos, new_tos, 2) < 0) {
+		bpf_printk("Failed to update IP checksum");
 		return TC_ACT_UNSPEC;
 	}
 	
