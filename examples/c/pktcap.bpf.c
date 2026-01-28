@@ -4,6 +4,7 @@
 #include <bpf/bpf_endian.h>
 
 #define ETH_P_IP 0x0800
+#define TC_ACT_OK 0
 #define CAPTURE_LEN 128  // 抓取前128字节
 
 struct packet_event {
@@ -33,18 +34,18 @@ int packet_capture(struct __sk_buff *skb)
 	__u16 capture_len;
 	
 	if ((void *)(eth + 1) > data_end)
-		return 0;
+		return TC_ACT_OK;  // 放行
 	
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		return 0;
+		return TC_ACT_OK;  // 非 IPv4，放行
 	
 	ip = (struct iphdr *)(eth + 1);
 	if ((void *)(ip + 1) > data_end)
-		return 0;
+		return TC_ACT_OK;  // 放行
 	
 	evt = bpf_ringbuf_reserve(&packets, sizeof(*evt), 0);
 	if (!evt)
-		return 0;
+		return TC_ACT_OK;  // 内存不足，直接放行
 	
 	evt->src_ip = ip->saddr;
 	evt->dst_ip = ip->daddr;
@@ -81,7 +82,7 @@ int packet_capture(struct __sk_buff *skb)
 	}
 	
 	bpf_ringbuf_submit(evt, 0);
-	return 0;
+	return TC_ACT_OK;  // 抓包完成，放行给下一个程序
 }
 
 char __license[] SEC("license") = "GPL";
