@@ -3,8 +3,8 @@
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
-#define TC_ACT_OK   0  // 继续传递给下一个程序
-#define TC_ACT_SHOT 2  // 丢弃数据包
+#define TC_ACT_UNSPEC (-1) // 默认行为，继续处理
+#define TC_ACT_SHOT   2    // 丢弃数据包
 
 #define ETH_P_IP 0x0800
 
@@ -24,16 +24,16 @@ int egress_firewall(struct __sk_buff *skb)
 	// 检查以太网头
 	eth = data;
 	if ((void *)(eth + 1) > data_end)
-		return TC_ACT_OK;
+		return TC_ACT_UNSPEC;
 
 	// 只处理 IPv4
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		return TC_ACT_OK;
+		return TC_ACT_UNSPEC;
 
 	// 检查 IP 头
 	ip = (struct iphdr *)(eth + 1);
 	if ((void *)(ip + 1) > data_end)
-		return TC_ACT_OK;
+		return TC_ACT_UNSPEC;
 
 	__u32 src_ip = ip->saddr;
 
@@ -43,8 +43,8 @@ int egress_firewall(struct __sk_buff *skb)
 		return TC_ACT_SHOT;  // 丢弃数据包
 	}
 
-	// 允许其他流量
-	return TC_ACT_OK;
+	// 允许其他流量，使用 TC_ACT_UNSPEC 让 Calico 继续处理
+	return TC_ACT_UNSPEC;
 }
 
 char __license[] SEC("license") = "GPL";
