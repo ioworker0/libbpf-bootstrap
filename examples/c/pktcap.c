@@ -132,32 +132,51 @@ int main(int argc, char **argv) {
 	
 	fprintf(stderr, "BPF program loaded\n");
 	
-	DECLARE_LIBBPF_OPTS(bpf_tc_hook, hook, .ifindex = ifindex,
-			    .attach_point = BPF_TC_INGRESS | BPF_TC_EGRESS);
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_ingress, .handle = 2, .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_egress, .handle = 3, .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
+	// 参考 egress_filter 的方式
+	// 设置 TC hook (ingress)
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_ingress,
+			    .ifindex = ifindex,
+			    .attach_point = BPF_TC_INGRESS);
 	
-	err = bpf_tc_hook_create(&hook);
+	// 创建 qdisc (如果不存在)
+	err = bpf_tc_hook_create(&tc_hook_ingress);
 	if (err && err != -EEXIST) {
 		fprintf(stderr, "Failed to create TC hook: %d\n", err);
 		goto cleanup;
 	}
 	
-	hook.attach_point = BPF_TC_INGRESS;
-	if (bpf_tc_attach(&hook, &opts_ingress)) {
-		fprintf(stderr, "Failed to attach ingress\n");
+	// 设置 TC opts (ingress)
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_ingress,
+			    .handle = 2,
+			    .priority = 5,
+			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
+	
+	// Attach 程序到 TC ingress
+	err = bpf_tc_attach(&tc_hook_ingress, &tc_opts_ingress);
+	if (err) {
+		fprintf(stderr, "Failed to attach TC ingress: %d\n", err);
 		goto cleanup;
 	}
-	fprintf(stderr, "Attached to ingress\n");
+	fprintf(stderr, "Attached to ingress (priority: 5, handle: 0x2)\n");
 	
-	hook.attach_point = BPF_TC_EGRESS;
-	if (bpf_tc_attach(&hook, &opts_egress)) {
-		fprintf(stderr, "Warning: Failed to attach egress (may already exist)\n");
-	} else {
-		fprintf(stderr, "Attached to egress\n");
+	// 设置 TC hook (egress)
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_egress,
+			    .ifindex = ifindex,
+			    .attach_point = BPF_TC_EGRESS);
+	
+	// 设置 TC opts (egress)
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_egress,
+			    .handle = 3,
+			    .priority = 5,
+			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
+	
+	// Attach 程序到 TC egress
+	err = bpf_tc_attach(&tc_hook_egress, &tc_opts_egress);
+	if (err) {
+		fprintf(stderr, "Failed to attach TC egress: %d\n", err);
+		goto cleanup;
 	}
+	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x3)\n");
 	
 	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, NULL, NULL);
 	if (!rb) {
@@ -181,17 +200,24 @@ int main(int argc, char **argv) {
 	}
 	
 	printf("\n\nDetaching...\n");
-	opts_ingress.flags = 0;
-	opts_ingress.prog_fd = 0;
-	opts_ingress.prog_id = 0;
-	opts_egress.flags = 0;
-	opts_egress.prog_fd = 0;
-	opts_egress.prog_id = 0;
 	
-	hook.attach_point = BPF_TC_INGRESS;
-	bpf_tc_detach(&hook, &opts_ingress);
-	hook.attach_point = BPF_TC_EGRESS;
-	bpf_tc_detach(&hook, &opts_egress);
+	// Detach ingress
+	tc_opts_ingress.flags = 0;
+	tc_opts_ingress.prog_fd = 0;
+	tc_opts_ingress.prog_id = 0;
+	err = bpf_tc_detach(&tc_hook_ingress, &tc_opts_ingress);
+	if (err) {
+		fprintf(stderr, "Failed to detach TC ingress: %d\n", err);
+	}
+	
+	// Detach egress
+	tc_opts_egress.flags = 0;
+	tc_opts_egress.prog_fd = 0;
+	tc_opts_egress.prog_id = 0;
+	err = bpf_tc_detach(&tc_hook_egress, &tc_opts_egress);
+	if (err) {
+		fprintf(stderr, "Failed to detach TC egress: %d\n", err);
+	}
 	
 cleanup:
 	ring_buffer__free(rb);
