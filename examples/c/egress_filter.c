@@ -22,9 +22,6 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 {
 	if (level == LIBBPF_DEBUG)
 		return 0;
-	// 过滤掉 "Exclusivity flag" 警告，这是正常的（Calico 已创建 qdisc）
-	if (level == LIBBPF_WARN && strstr(format, "Exclusivity flag"))
-		return 0;
 	return vfprintf(stderr, format, args);
 }
 
