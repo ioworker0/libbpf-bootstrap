@@ -22,15 +22,21 @@
 const volatile __u8 target_dscp = DSCP_EF;  // 默认设置为 EF (最高优先级)
 
 // Calico style: 手动更新 IP 校验和（RFC-1141 增量更新）
+// 修正版：TOS 是 IP 头的低位字节，不需要左移！
 static __always_inline void ip_update_csum_for_tos(struct iphdr *ip, __u8 old_tos, __u8 new_tos)
 {
-	/* Since we change only TOS byte, as per RFC-1141 we can adjust it
-	 * inline without helpers.
-	 * Checksum adjustment: ~old + new
-	 */
 	__u32 sum = ip->check;
-	sum += bpf_htons((__u16)(new_tos - old_tos) << 8);
-	ip->check = (__u16)(sum + (sum >> 16));
+	// TOS 在 [Ver/IHL][TOS] 这个 16-bit 字的低位
+	// 所以直接加上差值，不需要 << 8
+	// 使用 bpf_htons 确保字节序正确处理
+	sum += bpf_htons((__u16)(new_tos - old_tos));
+	
+	// 处理进位 (Standard RFC 1071/1141 checksum arithmetic)
+	sum = (sum & 0xffff) + (sum >> 16);
+	// 再次处理可能的进位
+	sum = (sum & 0xffff) + (sum >> 16);
+	
+	ip->check = (__u16)sum;
 }
 
 SEC("tc")
@@ -71,7 +77,7 @@ int dscp_marker(struct __sk_buff *skb)
 	// Calico style: 直接修改指针
 	ip->tos = new_tos;
 	
-	// Calico style: 手动更新校验和（RFC-1141 增量更新）
+	// Calico style: 手动更新校验和（修正公式）
 	ip_update_csum_for_tos(ip, old_tos, new_tos);
 	
 	bpf_printk("DSCP marked: 0x%x (TOS: 0x%x -> 0x%x)", 
