@@ -31,8 +31,6 @@ int dscp_marker(struct __sk_buff *skb)
 	__u8 old_tos, new_tos;
 	__u8 ecn_bits;
 	int l3_off = sizeof(struct ethhdr);
-	int tos_off = l3_off + offsetof(struct iphdr, tos);
-	int csum_off = l3_off + offsetof(struct iphdr, check);
 
 	// 检查以太网头
 	eth = data;
@@ -51,29 +49,26 @@ int dscp_marker(struct __sk_buff *skb)
 	// 读取当前 TOS 字段
 	old_tos = ip->tos;
 	
-	// 先打印日志，确认程序在执行
-	bpf_printk("Processing packet: src=%pI4 dst=%pI4 tos=0x%x", 
-		   &ip->saddr, &ip->daddr, old_tos);
-	
 	// 保留 ECN 位（低 2 位），只修改 DSCP（高 6 位）
 	ecn_bits = old_tos & 0x03;
 	new_tos = (target_dscp << 2) | ecn_bits;
 	
 	// 如果 TOS 没变，不需要修改
-	if (old_tos == new_tos) {
-		bpf_printk("TOS unchanged, skip");
+	if (old_tos == new_tos)
+		return TC_ACT_UNSPEC;
+	
+	// 直接修改 TOS 字段（Cilium 风格）
+	ip->tos = new_tos;
+	
+	// 更新 IP 头校验和（Cilium ipv4_csum_update_by_value 风格）
+	// l3_csum_replace() takes at min 2 bytes, zero extended.
+	if (bpf_l3_csum_replace(skb, l3_off + offsetof(struct iphdr, check),
+				old_tos, new_tos, 2) < 0) {
+		bpf_printk("Failed to update checksum");
 		return TC_ACT_UNSPEC;
 	}
 	
-	// 使用 bpf_skb_store_bytes 安全地修改 TOS 字段
-	// 使用 BPF_F_RECOMPUTE_CSUM 标志让内核自动重算校验和
-	int ret = bpf_skb_store_bytes(skb, tos_off, &new_tos, sizeof(new_tos), BPF_F_RECOMPUTE_CSUM);
-	if (ret < 0) {
-		bpf_printk("Failed to store TOS byte: %d", ret);
-		return TC_ACT_UNSPEC;
-	}
-	
-	bpf_printk("DSCP marked SUCCESS: DSCP 0x%x (TOS: 0x%x -> 0x%x)", 
+	bpf_printk("DSCP marked: 0x%x (TOS: 0x%x -> 0x%x)", 
 		   target_dscp, old_tos, new_tos);
 	
 	return TC_ACT_UNSPEC;
