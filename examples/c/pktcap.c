@@ -134,9 +134,9 @@ int main(int argc, char **argv) {
 	
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, hook, .ifindex = ifindex,
 			    .attach_point = BPF_TC_INGRESS | BPF_TC_EGRESS);
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_ingress, .handle = 1, .priority = 5,
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_ingress, .handle = 2, .priority = 5,
 			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_egress, .handle = 1, .priority = 5,
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, opts_egress, .handle = 3, .priority = 5,
 			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
 	
 	err = bpf_tc_hook_create(&hook);
