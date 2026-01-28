@@ -87,10 +87,10 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	// 设置 TC opts，优先级设为 1（确保在 Calico 之前执行）
+	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
 			    .handle = 1,
-			    .priority = 1,  // 优先级 1，小于 Calico 的 49151
+			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
 			    .prog_fd = bpf_program__fd(skel->progs.egress_firewall));
 
 	// Attach 程序到 TC egress
