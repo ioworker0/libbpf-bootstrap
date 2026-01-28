@@ -21,13 +21,16 @@
 // 配置：要设置的 DSCP 值（从用户态配置）
 const volatile __u8 target_dscp = DSCP_EF;  // 默认设置为 EF (最高优先级)
 
-// Cilium style: IPv4 checksum update helper
-static __always_inline int
-ipv4_csum_update_by_value(struct __sk_buff *ctx, int l3_off, __u32 old_val,
-			  __u32 new_val, __u32 len)
+// Calico style: 手动更新 IP 校验和（RFC-1141 增量更新）
+static __always_inline void ip_update_csum_for_tos(struct iphdr *ip, __u8 old_tos, __u8 new_tos)
 {
-	return bpf_l3_csum_replace(ctx, l3_off + offsetof(struct iphdr, check),
-				   old_val, new_val, len);
+	/* Since we change only TOS byte, as per RFC-1141 we can adjust it
+	 * inline without helpers.
+	 * Checksum adjustment: ~old + new
+	 */
+	__u32 sum = ip->check;
+	sum += bpf_htons((__u16)(new_tos - old_tos) << 8);
+	ip->check = (__u16)(sum + (sum >> 16));
 }
 
 SEC("tc")
@@ -39,7 +42,6 @@ int dscp_marker(struct __sk_buff *skb)
 	struct iphdr *ip;
 	__u8 old_tos, new_tos;
 	__u8 ecn_bits;
-	int l3_off = sizeof(struct ethhdr);
 
 	// 检查以太网头
 	eth = data;
@@ -66,12 +68,12 @@ int dscp_marker(struct __sk_buff *skb)
 	if (old_tos == new_tos)
 		return TC_ACT_UNSPEC;
 	
-	// Cilium style: 直接修改指针
+	// Calico style: 直接修改指针
 	ip->tos = new_tos;
 	
-	// 不要自己更新校验和，让内核处理
-	// 因为后续 Calico 或路由可能还会修改其他字段（如 TTL）
-	// 标记 skb 需要重新计算校验和
+	// Calico style: 手动更新校验和（RFC-1141 增量更新）
+	ip_update_csum_for_tos(ip, old_tos, new_tos);
+	
 	bpf_printk("DSCP marked: 0x%x (TOS: 0x%x -> 0x%x)", 
 		   target_dscp, old_tos, new_tos);
 	
