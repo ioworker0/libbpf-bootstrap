@@ -60,15 +60,9 @@ int dscp_marker(struct __sk_buff *skb)
 		return TC_ACT_UNSPEC;
 	
 	// 使用 bpf_skb_store_bytes 安全地修改 TOS 字段
-	if (bpf_skb_store_bytes(skb, tos_off, &new_tos, sizeof(new_tos), 0) < 0) {
+	// 使用 BPF_F_RECOMPUTE_CSUM 标志让内核自动重算校验和
+	if (bpf_skb_store_bytes(skb, tos_off, &new_tos, sizeof(new_tos), BPF_F_RECOMPUTE_CSUM) < 0) {
 		bpf_printk("Failed to store TOS byte");
-		return TC_ACT_UNSPEC;
-	}
-	
-	// 更新 IP 头校验和（增量更新，参考 Cilium ipv4_csum_update_by_value）
-	// l3_csum_replace: offset, old_value, new_value, flags (2 = 16-bit)
-	if (bpf_l3_csum_replace(skb, csum_off, old_tos, new_tos, 2) < 0) {
-		bpf_printk("Failed to update checksum");
 		return TC_ACT_UNSPEC;
 	}
 	
