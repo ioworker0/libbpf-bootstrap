@@ -87,6 +87,9 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 {
 	if (level == LIBBPF_DEBUG)
 		return 0;
+	// 过滤掉 "Exclusivity flag" 警告，这是正常的（Calico 已创建 qdisc）
+	if (level == LIBBPF_WARN && strstr(format, "Exclusivity flag"))
+		return 0;
 	return vfprintf(stderr, format, args);
 }
 
@@ -138,16 +141,19 @@ int main(int argc, char **argv) {
 			    .ifindex = ifindex,
 			    .attach_point = BPF_TC_INGRESS);
 	
-	// 创建 qdisc (如果不存在)
+	// 创建 qdisc (如果不存在)，忽略已存在错误
 	err = bpf_tc_hook_create(&tc_hook_ingress);
 	if (err && err != -EEXIST) {
 		fprintf(stderr, "Failed to create TC hook: %d\n", err);
 		goto cleanup;
 	}
+	if (err == -EEXIST) {
+		fprintf(stderr, "TC qdisc already exists (created by Calico)\n");
+	}
 	
 	// 设置 TC opts (ingress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_ingress,
-			    .handle = 2,
+			    .handle = 1,
 			    .priority = 5,
 			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
 	
@@ -157,7 +163,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Failed to attach TC ingress: %d\n", err);
 		goto cleanup;
 	}
-	fprintf(stderr, "Attached to ingress (priority: 5, handle: 0x2)\n");
+	fprintf(stderr, "Attached to ingress (priority: 5, handle: 0x1)\n");
 	
 	// 设置 TC hook (egress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_egress,
@@ -166,7 +172,7 @@ int main(int argc, char **argv) {
 	
 	// 设置 TC opts (egress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_egress,
-			    .handle = 3,
+			    .handle = 1,
 			    .priority = 5,
 			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
 	
@@ -176,7 +182,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Failed to attach TC egress: %d\n", err);
 		goto cleanup;
 	}
-	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x3)\n");
+	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x1)\n");
 	
 	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, NULL, NULL);
 	if (!rb) {

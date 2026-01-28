@@ -22,6 +22,9 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 {
 	if (level == LIBBPF_DEBUG)
 		return 0;
+	// 过滤掉 "Exclusivity flag" 警告，这是正常的（Calico 已创建 qdisc）
+	if (level == LIBBPF_WARN && strstr(format, "Exclusivity flag"))
+		return 0;
 	return vfprintf(stderr, format, args);
 }
 
@@ -80,16 +83,19 @@ int main(int argc, char **argv)
 			    .ifindex = ifindex,
 			    .attach_point = BPF_TC_EGRESS);
 
-	// 创建 qdisc (如果不存在)
+	// 创建 qdisc (如果不存在)，忽略已存在错误
 	err = bpf_tc_hook_create(&tc_hook);
 	if (err && err != -EEXIST) {
 		fprintf(stderr, "Failed to create TC hook: %d\n", err);
 		goto cleanup;
 	}
+	if (err == -EEXIST) {
+		printf("TC qdisc already exists (created by Calico)\n");
+	}
 
 	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
-			    .handle = 4,  // 使用不同的 handle 避免冲突
+			    .handle = 1,
 			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
 			    .prog_fd = bpf_program__fd(skel->progs.egress_firewall));
 
