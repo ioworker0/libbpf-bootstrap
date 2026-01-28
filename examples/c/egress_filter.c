@@ -75,10 +75,10 @@ int main(int argc, char **argv)
 
 	printf("BPF program loaded successfully\n");
 
-	// 设置 TC hook (egress)
+	// 设置 TC hook (ingress) - veth 上 ingress 才是容器发出的包
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
 			    .ifindex = ifindex,
-			    .attach_point = BPF_TC_EGRESS);
+			    .attach_point = BPF_TC_INGRESS);
 
 	// 创建 qdisc (如果不存在)，忽略已存在错误
 	err = bpf_tc_hook_create(&tc_hook);

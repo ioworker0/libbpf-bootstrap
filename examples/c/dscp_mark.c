@@ -122,10 +122,10 @@ int main(int argc, char **argv)
 
 	printf("BPF program loaded successfully\n");
 
-	// 设置 TC hook (egress)
+	// 设置 TC hook (ingress) - veth 上 ingress 才是容器发出的包
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
 			    .ifindex = ifindex,
-			    .attach_point = BPF_TC_EGRESS);
+			    .attach_point = BPF_TC_INGRESS);
 
 	// 创建 qdisc (如果不存在)
 	err = bpf_tc_hook_create(&tc_hook);
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
 			    .priority = 3,
 			    .prog_fd = bpf_program__fd(skel->progs.dscp_marker));
 
-	// Attach 程序到 TC egress
+	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook, &tc_opts);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC program: %d\n", err);
@@ -151,9 +151,9 @@ int main(int argc, char **argv)
 	}
 
 	printf("Successfully attached DSCP marker to %s (priority: 3)\n", ifname);
-	printf("Marking ALL egress traffic with DSCP: 0x%02x\n", dscp_value);
+	printf("Marking ALL container egress traffic (veth ingress) with DSCP: 0x%02x\n", dscp_value);
 	printf("Press Ctrl+C to detach and exit...\n");
-	printf("\nYou can verify with: tc filter show dev %s egress\n", ifname);
+	printf("\nYou can verify with: tc filter show dev %s ingress\n", ifname);
 	printf("To see logs: sudo cat /sys/kernel/debug/tracing/trace_pipe\n\n");
 
 	// 注册信号处理

@@ -30,6 +30,9 @@ int dscp_marker(struct __sk_buff *skb)
 	struct iphdr *ip;
 	__u8 old_tos, new_tos;
 	__u8 ecn_bits;
+	int l3_off = sizeof(struct ethhdr);
+	int tos_off = l3_off + offsetof(struct iphdr, tos);
+	int csum_off = l3_off + offsetof(struct iphdr, check);
 
 	// 检查以太网头
 	eth = data;
@@ -56,13 +59,14 @@ int dscp_marker(struct __sk_buff *skb)
 	if (old_tos == new_tos)
 		return TC_ACT_UNSPEC;
 	
-	// 修改 TOS 字段（直接修改 skb 数据）
-	ip->tos = new_tos;
+	// 使用 bpf_skb_store_bytes 安全地修改 TOS 字段
+	if (bpf_skb_store_bytes(skb, tos_off, &new_tos, sizeof(new_tos), 0) < 0) {
+		bpf_printk("Failed to store TOS byte");
+		return TC_ACT_UNSPEC;
+	}
 	
-	// 更新 IP 头校验和（使用 Cilium 风格的增量更新）
-	// l3_csum_replace: 更新 L3 (IP) 校验和
-	// 参数：skb, offset, old_value, new_value, size(2=16位)
-	int csum_off = sizeof(struct ethhdr) + offsetof(struct iphdr, check);
+	// 更新 IP 头校验和（增量更新，参考 Cilium ipv4_csum_update_by_value）
+	// l3_csum_replace: offset, old_value, new_value, flags (2 = 16-bit)
 	if (bpf_l3_csum_replace(skb, csum_off, old_tos, new_tos, 2) < 0) {
 		bpf_printk("Failed to update checksum");
 		return TC_ACT_UNSPEC;
