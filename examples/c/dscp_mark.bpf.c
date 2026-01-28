@@ -69,13 +69,9 @@ int dscp_marker(struct __sk_buff *skb)
 	// Cilium style: 直接修改指针
 	ip->tos = new_tos;
 	
-	// Cilium style: 更新校验和
-	// l3_csum_replace() takes at min 2 bytes, zero extended.
-	if (ipv4_csum_update_by_value(skb, l3_off, old_tos, new_tos, 2) < 0) {
-		bpf_printk("Failed to update IP checksum");
-		return TC_ACT_UNSPEC;
-	}
-	
+	// 不要自己更新校验和，让内核处理
+	// 因为后续 Calico 或路由可能还会修改其他字段（如 TTL）
+	// 标记 skb 需要重新计算校验和
 	bpf_printk("DSCP marked: 0x%x (TOS: 0x%x -> 0x%x)", 
 		   target_dscp, old_tos, new_tos);
 	
