@@ -96,7 +96,7 @@ int main(int argc, char **argv)
 			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
 			    .prog_fd = bpf_program__fd(skel->progs.egress_firewall));
 
-	// Attach 程序到 TC egress
+	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook, &tc_opts);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC program: %d\n", err);
@@ -104,9 +104,9 @@ int main(int argc, char **argv)
 	}
 
 	printf("Successfully attached egress filter to %s (priority: %d)\n", ifname, tc_opts.priority);
-	printf("Blocking egress traffic from IP: 111.63.65.103\n");
+	printf("Blocking all container access to destination IP: 111.63.65.103\n");
 	printf("Press Ctrl+C to detach and exit...\n");
-	printf("\nYou can verify with: tc filter show dev %s egress\n", ifname);
+	printf("\nYou can verify with: tc filter show dev %s ingress\n", ifname);
 	printf("To see logs: sudo cat /sys/kernel/debug/tracing/trace_pipe\n\n");
 
 	// 注册信号处理

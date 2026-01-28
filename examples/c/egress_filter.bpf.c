@@ -35,12 +35,12 @@ int egress_firewall(struct __sk_buff *skb)
 	if ((void *)(ip + 1) > data_end)
 		return TC_ACT_UNSPEC;
 
-	__u32 src_ip = ip->saddr;
+	__u32 dst_ip = ip->daddr;
 
-	// 检查源 IP 是否是要阻断的容器 IP
-	// 在 veth ingress 上，src_ip 就是容器的 IP
-	if (src_ip == BLOCKED_IP) {
-		bpf_printk("Blocked container egress from IP: 111.63.65.103");
+	// 检查目标 IP 是否是要阻断的 IP
+	// 拦截所有容器访问 111.63.65.103 的流量
+	if (dst_ip == BLOCKED_IP) {
+		bpf_printk("Blocked container access to IP: 111.63.65.103");
 		return TC_ACT_SHOT;  // 丢弃数据包
 	}
 
