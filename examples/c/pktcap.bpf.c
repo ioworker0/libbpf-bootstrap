@@ -23,8 +23,18 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } packets SEC(".maps");
 
+// Watchdog map: 用于检测用户态程序是否存活
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);  // 最后更新时间戳（纳秒）
+} plux_watchdog SEC(".maps");
+
+#define WATCHDOG_TIMEOUT_NS (10ULL * 1000000000ULL)  // 10 秒超时
+
 SEC("tc")
-int packet_capture(struct __sk_buff *skb)
+int plux_packet_capture(struct __sk_buff *skb)
 {
 	void *data_end = (void *)(__u64)skb->data_end;
 	void *data = (void *)(__u64)skb->data;
@@ -32,6 +42,17 @@ int packet_capture(struct __sk_buff *skb)
 	struct iphdr *ip;
 	struct packet_event *evt;
 	__u16 capture_len;
+	
+	// Watchdog 检查：如果用户态程序挂了，自动放行所有流量
+	__u32 key = 0;
+	__u64 *last_heartbeat = bpf_map_lookup_elem(&plux_watchdog, &key);
+	if (last_heartbeat) {
+		__u64 now = bpf_ktime_get_ns();
+		if (now - *last_heartbeat > WATCHDOG_TIMEOUT_NS) {
+			bpf_printk("plux_packet_capture: watchdog timeout, bypassing");
+			return TC_ACT_UNSPEC;  // 超时，放行
+		}
+	}
 	
 	if ((void *)(eth + 1) > data_end)
 		return TC_ACT_UNSPEC;  // 放行，让后续程序继续处理

@@ -32,7 +32,7 @@ struct {
 	__type(value, __u64);  // 最后更新时间戳（纳秒）
 } plux_watchdog SEC(".maps");
 
-#define WATCHDOG_TIMEOUT_NS (30ULL * 1000000000ULL)  // 30 秒超时
+#define WATCHDOG_TIMEOUT_NS (10ULL * 1000000000ULL)  // 10 秒超时
 
 
 // Cilium style: 使用 bpf_l3_csum_replace 增量更新校验和

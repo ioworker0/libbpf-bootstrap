@@ -3,9 +3,11 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
 #include <ctype.h>
 #include "pktcap.skel.h"
 
@@ -94,6 +96,7 @@ int main(int argc, char **argv) {
 	struct pktcap_bpf *skel;
 	struct ring_buffer *rb;
 	int ifindex, err;
+	int watchdog_fd;
 	
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
@@ -132,6 +135,13 @@ int main(int argc, char **argv) {
 	
 	fprintf(stderr, "BPF program loaded\n");
 	
+	// 获取 watchdog map fd
+	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
+	if (watchdog_fd < 0) {
+		fprintf(stderr, "Failed to get watchdog map fd\n");
+		goto cleanup;
+	}
+	
 	// 参考 egress_filter 的方式
 	// 设置 TC hook (ingress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_ingress,
@@ -148,17 +158,52 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "TC qdisc already exists (created by Calico)\n");
 	}
 	
+	// Attach 前清理 ingress：删除旧的 plux_packet_capture 程序（priority 5）
+	fprintf(stderr, "Cleaning up old ingress filter at priority 5...\n");
+	
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts_ingress,
+			    .handle = 1,
+			    .priority = 5,
+			    .prog_fd = 0,
+			    .prog_id = 0,
+			    .flags = 0);
+	
+	err = bpf_tc_query(&tc_hook_ingress, &old_opts_ingress);
+	if (err == 0) {
+		fprintf(stderr, "  -> Found old ingress filter (handle=%u, prog_id=%u)\n", 
+		       old_opts_ingress.handle, old_opts_ingress.prog_id);
+		
+		old_opts_ingress.prog_fd = 0;
+		old_opts_ingress.prog_id = 0;
+		old_opts_ingress.flags = 0;
+		
+		err = bpf_tc_detach(&tc_hook_ingress, &old_opts_ingress);
+		if (err == 0) {
+			fprintf(stderr, "  -> Removed successfully\n");
+		} else {
+			fprintf(stderr, "  -> Failed to remove: %d (continuing anyway)\n", err);
+		}
+	} else {
+		fprintf(stderr, "  -> No old ingress filter with handle 1 found (err=%d)\n", err);
+		err = bpf_tc_detach(&tc_hook_ingress, &old_opts_ingress);
+		if (err == 0) {
+			fprintf(stderr, "  -> Detached handle 1 successfully (blind detach)\n");
+		} else if (err != -ENOENT) {
+			fprintf(stderr, "  -> Failed to detach handle 1: %d\n", err);
+		}
+	}
+	
 	// 设置 TC opts (ingress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_ingress,
 			    .handle = 1,
 			    .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
+			    .prog_fd = bpf_program__fd(skel->progs.plux_packet_capture));
 	
 	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook_ingress, &tc_opts_ingress);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC ingress: %d\n", err);
-		goto cleanup;
+		goto cleanup_detach;
 	}
 	fprintf(stderr, "Attached to ingress (priority: 5, handle: 0x1)\n");
 	
@@ -167,24 +212,66 @@ int main(int argc, char **argv) {
 			    .ifindex = ifindex,
 			    .attach_point = BPF_TC_EGRESS);
 	
+	// 创建 egress qdisc (如果不存在)
+	err = bpf_tc_hook_create(&tc_hook_egress);
+	if (err && err != -EEXIST) {
+		fprintf(stderr, "Failed to create TC egress hook: %d\n", err);
+		goto cleanup_detach;
+	}
+	
+	// Attach 前清理 egress：删除旧的 plux_packet_capture 程序（priority 5）
+	fprintf(stderr, "Cleaning up old egress filter at priority 5...\n");
+	
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts_egress,
+			    .handle = 1,
+			    .priority = 5,
+			    .prog_fd = 0,
+			    .prog_id = 0,
+			    .flags = 0);
+	
+	err = bpf_tc_query(&tc_hook_egress, &old_opts_egress);
+	if (err == 0) {
+		fprintf(stderr, "  -> Found old egress filter (handle=%u, prog_id=%u)\n", 
+		       old_opts_egress.handle, old_opts_egress.prog_id);
+		
+		old_opts_egress.prog_fd = 0;
+		old_opts_egress.prog_id = 0;
+		old_opts_egress.flags = 0;
+		
+		err = bpf_tc_detach(&tc_hook_egress, &old_opts_egress);
+		if (err == 0) {
+			fprintf(stderr, "  -> Removed successfully\n");
+		} else {
+			fprintf(stderr, "  -> Failed to remove: %d (continuing anyway)\n", err);
+		}
+	} else {
+		fprintf(stderr, "  -> No old egress filter with handle 1 found (err=%d)\n", err);
+		err = bpf_tc_detach(&tc_hook_egress, &old_opts_egress);
+		if (err == 0) {
+			fprintf(stderr, "  -> Detached handle 1 successfully (blind detach)\n");
+		} else if (err != -ENOENT) {
+			fprintf(stderr, "  -> Failed to detach handle 1: %d\n", err);
+		}
+	}
+	
 	// 设置 TC opts (egress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_egress,
 			    .handle = 1,
 			    .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.packet_capture));
+			    .prog_fd = bpf_program__fd(skel->progs.plux_packet_capture));
 	
 	// Attach 程序到 TC egress
 	err = bpf_tc_attach(&tc_hook_egress, &tc_opts_egress);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC egress: %d\n", err);
-		goto cleanup;
+		goto cleanup_detach;
 	}
 	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x1)\n");
 	
 	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, NULL, NULL);
 	if (!rb) {
 		fprintf(stderr, "Failed to create ring buffer\n");
-		goto cleanup;
+		goto cleanup_detach;
 	}
 	
 	printf("\n");
@@ -194,16 +281,46 @@ int main(int argc, char **argv) {
 	printf("=======================================================\n");
 	
 	signal(SIGINT, sig_int);
+	signal(SIGTERM, sig_int);
+	signal(SIGHUP, sig_int);
+	
+	// 初始化心跳
+	__u32 key = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	__u64 now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+		fprintf(stderr, "Failed to initialize watchdog\n");
+		goto cleanup_detach;
+	}
+	fprintf(stderr, "Watchdog initialized (timeout: 30s, update interval: 1s)\n");
+	
+	// 主循环：轮询 ringbuf 并更新心跳
+	int poll_count = 0;
 	while (!exiting) {
-		err = ring_buffer__poll(rb, 100);
+		err = ring_buffer__poll(rb, 100);  // 100ms 超时
 		if (err < 0 && err != -EINTR) {
 			fprintf(stderr, "Error polling ring buffer: %d\n", err);
 			break;
 		}
+		
+		// 每 10 次轮询（约 1 秒）更新一次心跳
+		poll_count++;
+		if (poll_count >= 10) {
+			poll_count = 0;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+				fprintf(stderr, "Failed to update watchdog\n");
+				exiting = 1;
+				break;
+			}
+		}
 	}
 	
 	printf("\n\nDetaching...\n");
-	
+
+cleanup_detach:
 	// Detach ingress
 	tc_opts_ingress.flags = 0;
 	tc_opts_ingress.prog_fd = 0;
