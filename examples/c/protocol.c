@@ -265,7 +265,7 @@ int create_tcp_drop_stacktrace_json(const struct tcp_drop_stacktrace_data *data,
     cJSON_AddItemToObject(json, "addresses", addresses_array);
 
     /* Add TCP drop specific fields */
-    cJSON_AddNumberToObject(json, "timestamp", (double)data->timestamp);
+    /* 时间戳由 Go 端添加，此处不再发送 */
     
     /* 将 IP 地址转换为字符串 */
     char saddr_str[16], daddr_str[16];
