@@ -13,39 +13,67 @@
 // 小端: 67 41 3f 6f
 #define BLOCKED_IP 0x67413F6F  // 111.63.65.103 in little-endian
 
+// Watchdog: 心跳超时时间（纳秒），默认 10 秒
+#define WATCHDOG_TIMEOUT_NS (10ULL * 1000000000ULL)
+
+// Watchdog map: 存储最后一次心跳时间
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);  // 最后心跳时间戳（纳秒）
+} plux_watchdog SEC(".maps");
+
 SEC("tc")
-int egress_firewall(struct __sk_buff *skb)
+int plux_egress_firewall(struct __sk_buff *skb)
 {
-	void *data_end = (void *)(__u64)skb->data_end;
-	void *data = (void *)(__u64)skb->data;
-	struct ethhdr *eth;
-	struct iphdr *ip;
+    void *data_end = (void *)(__u64)skb->data_end;
+    void *data = (void *)(__u64)skb->data;
+    struct ethhdr *eth;
+    struct iphdr *ip;
+    __u32 key = 0;
+    __u64 *last_heartbeat;
+    __u64 now;
 
-	// 检查以太网头
-	eth = data;
-	if ((void *)(eth + 1) > data_end)
-		return TC_ACT_UNSPEC;
+    // Watchdog: 检查心跳超时
+    last_heartbeat = bpf_map_lookup_elem(&plux_watchdog, &key);
+    if (last_heartbeat) {
+        now = bpf_ktime_get_ns();
+        if (now - *last_heartbeat > WATCHDOG_TIMEOUT_NS) {
+            // 超时，自动放行所有流量（安全失效策略）
+            bpf_printk("plux_egress_firewall: watchdog timeout, bypassing");
+            return TC_ACT_UNSPEC;
+        }
+    } else {
+        // 没有心跳记录，放行（安全失效策略）
+        return TC_ACT_UNSPEC;
+    }
 
-	// 只处理 IPv4
-	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		return TC_ACT_UNSPEC;
+    // 检查以太网头
+    eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return TC_ACT_UNSPEC;
 
-	// 检查 IP 头
-	ip = (struct iphdr *)(eth + 1);
-	if ((void *)(ip + 1) > data_end)
-		return TC_ACT_UNSPEC;
+    // 只处理 IPv4
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return TC_ACT_UNSPEC;
 
-	__u32 dst_ip = ip->daddr;
+    // 检查 IP 头
+    ip = (struct iphdr *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return TC_ACT_UNSPEC;
 
-	// 检查目标 IP 是否是要阻断的 IP
-	// 拦截所有容器访问 111.63.65.103 的流量
-	if (dst_ip == BLOCKED_IP) {
-		bpf_printk("Blocked container access to IP: 111.63.65.103");
-		return TC_ACT_SHOT;  // 丢弃数据包
-	}
+    __u32 dst_ip = ip->daddr;
 
-	// 允许其他流量，使用 TC_ACT_UNSPEC 让 Calico 继续处理
-	return TC_ACT_UNSPEC;
+    // 检查目标 IP 是否是要阻断的 IP
+    // 拦截所有容器访问 111.63.65.103 的流量
+    if (dst_ip == BLOCKED_IP) {
+        bpf_printk("Blocked container access to IP: 111.63.65.103");
+        return TC_ACT_SHOT;  // 丢弃数据包
+    }
+
+    // 允许其他流量，使用 TC_ACT_UNSPEC 让 Calico 继续处理
+    return TC_ACT_UNSPEC;
 }
 
 char __license[] SEC("license") = "GPL";

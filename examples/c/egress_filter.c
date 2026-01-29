@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <bpf/libbpf.h>
@@ -31,6 +32,7 @@ int main(int argc, char **argv)
 	int err;
 	int ifindex;
 	char *ifname;
+	int watchdog_fd = -1;
 
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
@@ -75,6 +77,13 @@ int main(int argc, char **argv)
 
 	printf("BPF program loaded successfully\n");
 
+	// 获取 watchdog map fd
+	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
+	if (watchdog_fd < 0) {
+		fprintf(stderr, "Failed to get watchdog map fd\n");
+		goto cleanup;
+	}
+
 	// 设置 TC hook (ingress) - veth 上 ingress 才是容器发出的包
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
 			    .ifindex = ifindex,
@@ -90,11 +99,49 @@ int main(int argc, char **argv)
 		printf("TC qdisc already exists (created by Calico)\n");
 	}
 
+	// Attach 前清理：删除旧的 plux_egress_firewall 程序（priority 10）
+	printf("Checking for old plux TC programs (priority 10)...\n");
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
+			    .handle = 0,
+			    .priority = 10,
+			    .prog_id = 0,
+			    .flags = 0);
+	
+	if (bpf_tc_query(&tc_hook, &old_opts) == 0 && old_opts.prog_id > 0) {
+		// 找到了程序，检查是否是 plux 开头的
+		struct bpf_prog_info info = {};
+		__u32 info_len = sizeof(info);
+		int prog_fd = bpf_prog_get_fd_by_id(old_opts.prog_id);
+		
+		if (prog_fd >= 0) {
+			if (bpf_obj_get_info_by_fd(prog_fd, &info, &info_len) == 0) {
+				printf("Found existing program: %s (id=%u, prio=%d)\n",
+				       info.name, old_opts.prog_id, old_opts.priority);
+				
+				if (strcmp(info.name, "plux_egress_firewall") == 0) {
+					printf("  -> Removing old plux_egress_firewall...\n");
+					old_opts.prog_fd = 0;
+					old_opts.flags = 0;
+					if (bpf_tc_detach(&tc_hook, &old_opts) == 0) {
+						printf("  -> Removed successfully\n");
+					} else {
+						fprintf(stderr, "  -> Failed to remove\n");
+					}
+				} else {
+					printf("  -> Different program, keeping it\n");
+				}
+			}
+			close(prog_fd);
+		}
+	} else {
+		printf("No existing program found at priority 10\n");
+	}
+
 	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
 			    .handle = 1,
 			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
-			    .prog_fd = bpf_program__fd(skel->progs.egress_firewall));
+			    .prog_fd = bpf_program__fd(skel->progs.plux_egress_firewall));
 
 	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook, &tc_opts);
@@ -113,24 +160,43 @@ int main(int argc, char **argv)
 	if (signal(SIGINT, sig_int) == SIG_ERR) {
 		err = errno;
 		fprintf(stderr, "Can't set signal handler: %s\n", strerror(errno));
-		goto cleanup;
+		goto cleanup_detach;
 	}
+	signal(SIGTERM, sig_int);
+	signal(SIGHUP, sig_int);
 
-	// 主循环
+	// 初始化心跳
+	__u32 key = 0;
+	__u64 now = time(NULL) * 1000000000ULL;  // 转换为纳秒
+	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+		fprintf(stderr, "Failed to initialize watchdog: %s\n", strerror(errno));
+		goto cleanup_detach;
+	}
+	printf("Watchdog initialized (timeout: 30s, update interval: 1s)\n");
+
+	// 主循环：每 1 秒更新一次心跳
 	while (!exiting) {
 		sleep(1);
+		
+		if (!exiting) {
+			// 更新心跳时间戳
+			now = time(NULL) * 1000000000ULL;
+			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+				fprintf(stderr, "Failed to update watchdog: %s\n", strerror(errno));
+				exiting = 1;
+				goto cleanup_detach;
+			}
+		}
 	}
 
 	printf("\nDetaching program...\n");
 
+cleanup_detach:
 	// Detach 程序
 	tc_opts.flags = 0;
 	tc_opts.prog_fd = 0;
 	tc_opts.prog_id = 0;
-	err = bpf_tc_detach(&tc_hook, &tc_opts);
-	if (err) {
-		fprintf(stderr, "Failed to detach TC program: %d\n", err);
-	}
+	bpf_tc_detach(&tc_hook, &tc_opts);
 
 cleanup:
 	printf("Cleaning up...\n");
