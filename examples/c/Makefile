@@ -26,7 +26,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 APPS = minimal minimal_legacy minimal_ns bootstrap uprobe kprobe fentry \
        usdt sockfilter tc ksyscall task_iter lsm skb_kfree_skb skb_kfree_skb_no_reason my_runqslower offcputime captrace loopback-sockops loopback-redir \
-       my_thp_policy netrecvlat tcpiter tcpdestroy iotrace egress_filter pktcap dscp_mark
+       my_thp_policy netrecvlat tcpiter tcpdestroy iotrace egress_filter pktcap dscp_mark tcpdrop_tracer
 
 CARGO ?= $(shell which cargo)
 ifeq ($(strip $(CARGO)),)

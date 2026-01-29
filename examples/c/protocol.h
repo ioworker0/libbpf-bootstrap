@@ -54,6 +54,20 @@ struct stacktrace_data {
     uint32_t reaper_pid;
 };
 
+/* TCP drop stacktrace data structure */
+struct tcp_drop_stacktrace_data {
+    uint64_t timestamp;       /* 时间戳 (ns) */
+    uint32_t saddr;           /* 源 IP (IPv4) */
+    uint32_t daddr;           /* 目标 IP (IPv4) */
+    uint16_t sport;           /* 源端口 */
+    uint16_t dport;           /* 目标端口 */
+    uint32_t drop_reason;     /* 丢包原因 (0=不支持) */
+    uint8_t tcp_state;        /* TCP 状态 */
+    uint8_t tcp_flags;        /* TCP flags */
+    uint32_t depth;           /* 堆栈深度 */
+    uint64_t addresses[MAX_STACK_DEPTH];  /* 堆栈地址数组 */
+};
+
 /* Pack frame header for sending */
 static inline void pack_frame_header(struct frame_header *header, uint16_t msg_type, uint32_t data_len)
 {
@@ -66,5 +80,6 @@ int create_handshake_json(const struct handshake_data *data, char *json_buf, siz
 int create_heartbeat_json(const struct heartbeat_data *data, char *json_buf, size_t buf_size);
 int create_captrace_event_json(const struct captrace_event_data *data, char *json_buf, size_t buf_size);
 int create_stacktrace_json(const struct stacktrace_data *data, char *json_buf, size_t buf_size);
+int create_tcp_drop_stacktrace_json(const struct tcp_drop_stacktrace_data *data, char *json_buf, size_t buf_size);
 
 #endif /* __PLUX_PROTOCOL_H */
