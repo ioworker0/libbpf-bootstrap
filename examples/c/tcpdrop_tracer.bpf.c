@@ -107,9 +107,17 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
     __u16 sport = 0, dport = 0;
     __u8 tcp_flags = 0;
     __u8 tcp_state = 0;
+    __u32 drop_reason = 0;
     
-    // 注释掉 reason 过滤，兼容没有 drop_reason 的内核
-    // if (args->reason <= SKB_DROP_REASON_NOT_SPECIFIED)
+    // 动态检查内核是否有 reason 字段（兼容老内核）
+    if (bpf_core_field_exists(args->reason)) {
+        drop_reason = args->reason;
+    } else {
+        drop_reason = 0;  // 老内核没有 reason 字段
+    }
+    
+    // 注释掉 reason 过滤，因为很多场景 reason 都是 0
+    // if (drop_reason <= SKB_DROP_REASON_NOT_SPECIFIED)
     //     return 0;
     
     // 过滤: 排除 IPv6
@@ -131,6 +139,12 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
         bpf_probe_read_kernel(&tcp_state, sizeof(tcp_state), &sk->__sk_common.skc_state);
     }
     
+    // 只在 reason=0 时过滤正常关闭的连接（噪音过滤）
+    // TCP_CLOSE = 7, FIN flag = 0x01
+    if (drop_reason == 0 && tcp_state == 7 && (tcp_flags & 0x01)) {
+        return 0;  // 正常 FIN 包，不是真正的丢包
+    }
+    
     // 采集内核堆栈
     __s32 stack_id = bpf_get_stackid(args, &stack_traces, BPF_F_REUSE_STACKID);
     
@@ -145,7 +159,7 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
     e->daddr = daddr;
     e->sport = sport;
     e->dport = dport;
-    e->drop_reason = args->reason;  // 直接访问，不用 CO-RE
+    e->drop_reason = drop_reason;  // 使用之前判断的 drop_reason（可能为 0）
     e->tcp_state = tcp_state;
     e->tcp_flags = tcp_flags;
     e->stack_id = stack_id;
