@@ -131,7 +131,9 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
     // 提取 TCP 信息
     if (extract_tcp_info(skb, &saddr, &daddr, &sport, &dport, &tcp_flags) < 0)
         return 0;  // 不是 TCP，忽略
-    
+
+    // IP + PORT 过滤 TODO
+
     // 获取 TCP state (从 sock 结构体)
     bpf_probe_read_kernel(&sk, sizeof(sk), &skb->sk);
     if (sk) {
@@ -141,9 +143,9 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
     
     // 只在 reason=0 时过滤正常关闭的连接（噪音过滤）
     // TCP_CLOSE = 7, FIN flag = 0x01
-    if (drop_reason == 0 && tcp_state == 7 && (tcp_flags & 0x01)) {
-        return 0;  // 正常 FIN 包，不是真正的丢包
-    }
+//    if (drop_reason == 0 && tcp_state == 7 && (tcp_flags & 0x01)) {
+//        return 0;  // 正常 FIN 包，不是真正的丢包
+//    }
     
     // 采集内核堆栈
     __s32 stack_id = bpf_get_stackid(args, &stack_traces, BPF_F_REUSE_STACKID);
