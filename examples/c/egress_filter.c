@@ -167,7 +167,9 @@ int main(int argc, char **argv)
 
 	// 初始化心跳
 	__u32 key = 0;
-	__u64 now = time(NULL) * 1000000000ULL;  // 转换为纳秒
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	__u64 now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
 		fprintf(stderr, "Failed to initialize watchdog: %s\n", strerror(errno));
 		goto cleanup_detach;
@@ -180,7 +182,8 @@ int main(int argc, char **argv)
 		
 		if (!exiting) {
 			// 更新心跳时间戳
-			now = time(NULL) * 1000000000ULL;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
 				fprintf(stderr, "Failed to update watchdog: %s\n", strerror(errno));
 				exiting = 1;
