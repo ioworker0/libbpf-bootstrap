@@ -100,41 +100,22 @@ int main(int argc, char **argv)
 	}
 
 	// Attach 前清理：删除旧的 plux_egress_firewall 程序（priority 10）
-	printf("Checking for old plux TC programs (priority 10)...\n");
+	printf("Cleaning up old filter at priority 10...\n");
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
 			    .handle = 0,
 			    .priority = 10,
+			    .prog_fd = 0,
 			    .prog_id = 0,
 			    .flags = 0);
 	
-	if (bpf_tc_query(&tc_hook, &old_opts) == 0 && old_opts.prog_id > 0) {
-		// 找到了程序，检查是否是 plux 开头的
-		struct bpf_prog_info info = {};
-		__u32 info_len = sizeof(info);
-		int prog_fd = bpf_prog_get_fd_by_id(old_opts.prog_id);
-		
-		if (prog_fd >= 0) {
-			if (bpf_obj_get_info_by_fd(prog_fd, &info, &info_len) == 0) {
-				printf("Found existing program: %s (id=%u, prio=%d)\n",
-				       info.name, old_opts.prog_id, old_opts.priority);
-				
-				if (strcmp(info.name, "plux_egress_firewall") == 0) {
-					printf("  -> Removing old plux_egress_firewall...\n");
-					old_opts.prog_fd = 0;
-					old_opts.flags = 0;
-					if (bpf_tc_detach(&tc_hook, &old_opts) == 0) {
-						printf("  -> Removed successfully\n");
-					} else {
-						fprintf(stderr, "  -> Failed to remove\n");
-					}
-				} else {
-					printf("  -> Different program, keeping it\n");
-				}
-			}
-			close(prog_fd);
-		}
+	// 直接尝试删除，不管成功失败
+	err = bpf_tc_detach(&tc_hook, &old_opts);
+	if (err == 0) {
+		printf("  -> Removed old filter successfully\n");
+	} else if (err == -ENOENT) {
+		printf("  -> No old filter found (OK)\n");
 	} else {
-		printf("No existing program found at priority 10\n");
+		printf("  -> Failed to remove old filter: %d (continuing anyway)\n", err);
 	}
 
 	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
