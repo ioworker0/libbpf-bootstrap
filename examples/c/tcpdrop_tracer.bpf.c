@@ -98,7 +98,7 @@ static __always_inline int extract_tcp_info(struct sk_buff *skb,
 }
 
 SEC("tracepoint/skb/kfree_skb")
-int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *ctx)
+int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *args)
 {
     struct event *e;
     struct sk_buff *skb;
@@ -107,24 +107,16 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *ctx)
     __u16 sport = 0, dport = 0;
     __u8 tcp_flags = 0;
     __u8 tcp_state = 0;
-    __u32 drop_reason = 0;
     
-    // 检查内核是否支持 drop_reason 字段（CO-RE 特性）
-    if (bpf_core_field_exists(ctx->reason)) {
-        drop_reason = BPF_CORE_READ(ctx, reason);
-        // 过滤: 只关注实际丢包 (非 NOT_SPECIFIED)
-        if (drop_reason <= SKB_DROP_REASON_NOT_SPECIFIED)
-            return 0;
-    } else {
-        // 不支持 drop_reason，设置为 0
-        drop_reason = 0;
-    }
+    // 注释掉 reason 过滤，兼容没有 drop_reason 的内核
+    // if (args->reason <= SKB_DROP_REASON_NOT_SPECIFIED)
+    //     return 0;
     
     // 过滤: 排除 IPv6
-    if (ctx->protocol == bpf_htons(ETH_P_IPV6))
+    if (args->protocol == bpf_htons(ETH_P_IPV6))
         return 0;
     
-    skb = (struct sk_buff *)ctx->skbaddr;
+    skb = args->skbaddr;
     if (!skb)
         return 0;
     
@@ -140,7 +132,7 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *ctx)
     }
     
     // 采集内核堆栈
-    __s32 stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_REUSE_STACKID);
+    __s32 stack_id = bpf_get_stackid(args, &stack_traces, BPF_F_REUSE_STACKID);
     
     // 分配 ringbuf 空间
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
@@ -153,7 +145,7 @@ int tp__skb_kfree_skb(struct trace_event_raw_kfree_skb *ctx)
     e->daddr = daddr;
     e->sport = sport;
     e->dport = dport;
-    e->drop_reason = drop_reason;  // 使用之前读取的 drop_reason（可能为 0）
+    e->drop_reason = args->reason;  // 直接访问，不用 CO-RE
     e->tcp_state = tcp_state;
     e->tcp_flags = tcp_flags;
     e->stack_id = stack_id;
