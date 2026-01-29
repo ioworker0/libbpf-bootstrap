@@ -307,6 +307,17 @@ int main(int argc, char **argv)
     struct tcpdrop_tracer_bpf *skel = NULL;
     struct ring_buffer *rb = NULL;
     int err;
+    const char *btf_path = "/plux/btf/kernel.btf";
+
+    /* 提升内存锁定限制，BPF maps 需要锁定内存 */
+    struct rlimit rlim = {
+        .rlim_cur = RLIM_INFINITY,
+        .rlim_max = RLIM_INFINITY,
+    };
+    if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
+        fprintf(stderr, "[WARN] Failed to increase RLIMIT_MEMLOCK: %s\n", strerror(errno));
+        // 继续执行，libbpf 会自动处理
+    }
 
     /* 解析命令行参数 */
     for (int i = 1; i < argc; i++) {
@@ -316,7 +327,12 @@ int main(int argc, char **argv)
         }
     }
 
+    /* 设置信号处理 */
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
+
     /* 设置 libbpf 错误和调试信息回调 */
+    libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
     libbpf_set_print(libbpf_print_fn);
 
     /* 初始化 Plux Agent（如果配置了） */
@@ -332,8 +348,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "[INFO] Parsed %d drop reasons\n", drop_reason_max);
     }
 
-    /* 打开并加载 BPF 应用 */
-    skel = tcpdrop_tracer_bpf__open();
+    /* 打开 BPF 应用 (支持自定义 BTF) */
+    if (access(btf_path, R_OK) == 0) {
+        fprintf(stderr, "[INFO] Found custom BTF at %s, using it\n", btf_path);
+        LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
+        skel = tcpdrop_tracer_bpf__open_opts(&opts);
+    } else {
+        fprintf(stderr, "[INFO] Custom BTF not found at %s, using system BTF\n", btf_path);
+        skel = tcpdrop_tracer_bpf__open();
+    }
     if (!skel) {
         fprintf(stderr, "[ERROR] Failed to open BPF skeleton\n");
         return 1;
@@ -364,10 +387,6 @@ int main(int argc, char **argv)
     if (!g_enable_plux_agent) {
         fprintf(stderr, "[INFO] Running in standalone mode (use --config to enable Agent)\n");
     }
-
-    /* 设置信号处理 */
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
 
     /* 创建 ring buffer */
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
