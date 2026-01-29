@@ -24,6 +24,16 @@
 // 配置：要设置的 DSCP 值（从用户态配置）
 const volatile __u8 target_dscp = DSCP_EF;  // 默认设置为 EF (最高优先级)
 
+// Watchdog map: 用于检测用户态程序是否存活
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);  // 最后更新时间戳（纳秒）
+} plux_watchdog SEC(".maps");
+
+#define WATCHDOG_TIMEOUT_NS (30ULL * 1000000000ULL)  // 30 秒超时
+
 
 // Cilium style: 使用 bpf_l3_csum_replace 增量更新校验和
 // 之前的实现尝试手动计算校验和（RFC-1141），但在反码运算和字节序处理上容易出错。
@@ -41,7 +51,7 @@ static __always_inline int ip_update_csum_safe(struct __sk_buff *skb, __u8 old_t
 }
 
 SEC("tc")
-int dscp_marker(struct __sk_buff *skb)
+int plux_dscp_marker(struct __sk_buff *skb)
 {
 	void *data_end = (void *)(__u64)skb->data_end;
 	void *data = (void *)(__u64)skb->data;
@@ -49,6 +59,17 @@ int dscp_marker(struct __sk_buff *skb)
 	struct iphdr *ip;
 	__u8 old_tos, new_tos;
 	__u8 ecn_bits;
+
+	// Watchdog 检查：如果用户态程序挂了，自动放行所有流量
+	__u32 key = 0;
+	__u64 *last_heartbeat = bpf_map_lookup_elem(&plux_watchdog, &key);
+	if (last_heartbeat) {
+		__u64 now = bpf_ktime_get_ns();
+		if (now - *last_heartbeat > WATCHDOG_TIMEOUT_NS) {
+			bpf_printk("plux_dscp_marker: watchdog timeout, bypassing");
+			return TC_ACT_UNSPEC;
+		}
+	}
 
 	// 检查以太网头
 	eth = data;

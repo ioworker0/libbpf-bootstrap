@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <bpf/libbpf.h>
@@ -66,6 +67,7 @@ int main(int argc, char **argv)
 	int ifindex;
 	char *ifname;
 	__u8 dscp_value = DSCP_EF;  // 默认 EF (最高优先级)
+	int watchdog_fd;
 
 	if (argc < 2) {
 		print_usage(argv[0]);
@@ -123,6 +125,13 @@ int main(int argc, char **argv)
 
 	printf("BPF program loaded successfully\n");
 
+	// 获取 watchdog map fd
+	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
+	if (watchdog_fd < 0) {
+		fprintf(stderr, "Failed to get watchdog map fd\n");
+		goto cleanup;
+	}
+
 	// 设置 TC hook (ingress) - veth 上 ingress 才是容器发出的包
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
 			    .ifindex = ifindex,
@@ -138,17 +147,56 @@ int main(int argc, char **argv)
 		printf("TC qdisc already exists\n");
 	}
 
+	// Attach 前清理：删除旧的 plux_dscp_marker 程序（priority 3）
+	printf("Cleaning up old filter at priority 3...\n");
+	
+	// 我们 attach 时固定用了 handle 1，所以这里也直接清理 handle 1
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
+			    .handle = 1,
+			    .priority = 3,
+			    .prog_fd = 0,
+			    .prog_id = 0,
+			    .flags = 0);
+	
+	// 先 query 确认一下（可选，但这能拿到 prog_id 打印出来）
+	err = bpf_tc_query(&tc_hook, &old_opts);
+	if (err == 0) {
+		printf("  -> Found old filter (handle=%u, prog_id=%u)\n", 
+		       old_opts.handle, old_opts.prog_id);
+		
+		old_opts.prog_fd = 0;
+		old_opts.prog_id = 0;
+		old_opts.flags = 0;
+		
+		err = bpf_tc_detach(&tc_hook, &old_opts);
+		if (err == 0) {
+			printf("  -> Removed successfully\n");
+		} else {
+			printf("  -> Failed to remove: %d (continuing anyway)\n", err);
+		}
+	} else {
+		// 如果 query 不到 handle 1，说明可能没有，或者用了其他 handle
+		// 无论如何，尝试 detach 一下 handle 1 兜底
+		printf("  -> No old filter with handle 1 found (err=%d)\n", err);
+		err = bpf_tc_detach(&tc_hook, &old_opts);
+		if (err == 0) {
+			printf("  -> Detached handle 1 successfully (blind detach)\n");
+		} else if (err != -ENOENT) {
+			printf("  -> Failed to detach handle 1: %d\n", err);
+		}
+	}
+
 	// 设置 TC opts，优先级设为 3（在 Calico 49152 之前执行）
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
 			    .handle = 1,
 			    .priority = 3,
-			    .prog_fd = bpf_program__fd(skel->progs.dscp_marker));
+			    .prog_fd = bpf_program__fd(skel->progs.plux_dscp_marker));
 
 	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook, &tc_opts);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC program: %d\n", err);
-		goto cleanup;
+		goto cleanup_detach;
 	}
 
 	printf("Successfully attached DSCP marker to %s (priority: 3, before Calico)\n", ifname);
@@ -161,16 +209,41 @@ int main(int argc, char **argv)
 	if (signal(SIGINT, sig_int) == SIG_ERR) {
 		err = errno;
 		fprintf(stderr, "Can't set signal handler: %s\n", strerror(errno));
-		goto cleanup;
+		goto cleanup_detach;
 	}
+	signal(SIGTERM, sig_int);
+	signal(SIGHUP, sig_int);
 
-	// 主循环
+	// 初始化心跳
+	__u32 key = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	__u64 now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+		fprintf(stderr, "Failed to initialize watchdog: %s\n", strerror(errno));
+		goto cleanup_detach;
+	}
+	printf("Watchdog initialized (timeout: 30s, update interval: 1s)\n");
+
+	// 主循环：每 1 秒更新一次心跳
 	while (!exiting) {
 		sleep(1);
+		
+		if (!exiting) {
+			// 更新心跳时间戳
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+				fprintf(stderr, "Failed to update watchdog: %s\n", strerror(errno));
+				exiting = 1;
+				goto cleanup_detach;
+			}
+		}
 	}
 
 	printf("\nDetaching program...\n");
 
+cleanup_detach:
 	// Detach 程序
 	tc_opts.flags = 0;
 	tc_opts.prog_fd = 0;
