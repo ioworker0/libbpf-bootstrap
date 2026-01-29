@@ -100,22 +100,47 @@ int main(int argc, char **argv)
 	}
 
 	// Attach 前清理：删除旧的 plux_egress_firewall 程序（priority 10）
-	printf("Cleaning up old filter at priority 10...\n");
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
-			    .handle = 0,
-			    .priority = 10,
-			    .prog_fd = 0,
-			    .prog_id = 0,
-			    .flags = 0);
+	printf("Cleaning up old filters at priority 10...\n");
 	
-	// 直接尝试删除，不管成功失败
-	err = bpf_tc_detach(&tc_hook, &old_opts);
-	if (err == 0) {
-		printf("  -> Removed old filter successfully\n");
-	} else if (err == -ENOENT) {
-		printf("  -> No old filter found (OK)\n");
+	// 循环删除直到没有为止
+	int cleanup_count = 0;
+	while (1) {
+		DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
+				    .priority = 10);
+		
+		// 先 query 获取 handle 和 prog_id
+		err = bpf_tc_query(&tc_hook, &old_opts);
+		if (err != 0) {
+			// 没有更多的 filter 了
+			break;
+		}
+		
+		printf("  -> Found filter #%d (handle=%u, prog_id=%u)\n", 
+		       cleanup_count + 1, old_opts.handle, old_opts.prog_id);
+		
+		// 使用查询到的 handle 进行 detach
+		old_opts.prog_fd = 0;
+		old_opts.flags = 0;
+		err = bpf_tc_detach(&tc_hook, &old_opts);
+		if (err == 0) {
+			printf("  -> Removed successfully\n");
+			cleanup_count++;
+		} else {
+			printf("  -> Failed to remove: %d, stopping cleanup\n", err);
+			break;
+		}
+		
+		// 防止死循环
+		if (cleanup_count >= 10) {
+			printf("  -> Too many filters, stopping cleanup\n");
+			break;
+		}
+	}
+	
+	if (cleanup_count == 0) {
+		printf("  -> No old filters found (OK)\n");
 	} else {
-		printf("  -> Failed to remove old filter: %d (continuing anyway)\n", err);
+		printf("  -> Cleaned up %d old filter(s)\n", cleanup_count);
 	}
 
 	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
