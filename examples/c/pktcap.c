@@ -13,7 +13,26 @@
 
 static volatile sig_atomic_t exiting = 0;
 
-#define CAPTURE_LEN 128
+#define CAPTURE_LEN 1500
+
+// PCAP 文件头结构
+struct pcap_file_header {
+	__u32 magic;         // 0xa1b2c3d4
+	__u16 version_major; // 2
+	__u16 version_minor; // 4
+	__s32 thiszone;      // GMT to local correction
+	__u32 sigfigs;       // accuracy of timestamps
+	__u32 snaplen;       // max length saved
+	__u32 linktype;      // Data link type (1 = Ethernet)
+} __attribute__((packed));
+
+// PCAP 数据包头
+struct pcap_packet_header {
+	__u32 ts_sec;        // timestamp seconds
+	__u32 ts_usec;       // timestamp microseconds
+	__u32 incl_len;      // number of octets saved in file
+	__u32 orig_len;      // actual length of packet
+} __attribute__((packed));
 
 struct packet_event {
 	__u32 src_ip;
@@ -21,9 +40,16 @@ struct packet_event {
 	__u16 src_port;
 	__u16 dst_port;
 	__u8  protocol;
-	__u16 total_len;
+	__u8  _padding[3]; // 调整填充，使 total_len 对齐到 4 字节
+	__u32 total_len;   // 使用 u32 避免巨型帧(Jumbo Frame)溢出
 	__u16 data_len;
 	__u8  data[CAPTURE_LEN];
+};
+
+// 用于传递上下文的结构
+struct handler_ctx {
+	FILE *pcap_file;
+	unsigned long *packet_count;
 };
 
 static void sig_int(int signo) { exiting = 1; }
@@ -63,23 +89,54 @@ static void print_hex_dump(const __u8 *data, __u16 len) {
 }
 
 static int handle_packet(void *ctx, void *data, size_t len) {
+	struct handler_ctx *hctx = (struct handler_ctx *)ctx;
 	struct packet_event *pkt = data;
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
-	static unsigned long count = 0;
 	
 	inet_ntop(AF_INET, &pkt->src_ip, src, sizeof(src));
 	inet_ntop(AF_INET, &pkt->dst_ip, dst, sizeof(dst));
 	
-	printf("\n[%lu] %-5s %s", ++count, proto_name(pkt->protocol), src);
+	// 打印到控制台
+	printf("\n[%lu] %-5s %s", ++(*hctx->packet_count), proto_name(pkt->protocol), src);
 	if (pkt->src_port)
 		printf(":%d", pkt->src_port);
 	printf(" -> %s", dst);
 	if (pkt->dst_port)
 		printf(":%d", pkt->dst_port);
-	printf("  len=%d\n", pkt->total_len);
+	printf("  len=%u\n", pkt->total_len);
 	
-	if (pkt->data_len > 0) {
-		print_hex_dump(pkt->data, pkt->data_len);
+	if (pkt->data_len > 0 && pkt->data_len <= 128) {
+		// 只显示前 128 字节的 hex dump
+		print_hex_dump(pkt->data, pkt->data_len > 128 ? 128 : pkt->data_len);
+	}
+	
+	// 写入 PCAP 文件
+	if (hctx->pcap_file && pkt->data_len > 0) {
+		// 在用户态获取真实时间戳
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		
+		struct pcap_packet_header ph = {
+			.ts_sec = (__u32)ts.tv_sec,
+			.ts_usec = (__u32)(ts.tv_nsec / 1000),  // 纳秒转微秒
+			.incl_len = pkt->data_len,  // 实际捕获长度
+			.orig_len = pkt->total_len  // 原始包长度（Wire length）
+		};
+		
+		// 写入数据包头
+		if (fwrite(&ph, sizeof(ph), 1, hctx->pcap_file) != 1) {
+			fprintf(stderr, "Failed to write pcap packet header\n");
+			return -1;
+		}
+		
+		// 写入数据包内容
+		if (fwrite(pkt->data, pkt->data_len, 1, hctx->pcap_file) != 1) {
+			fprintf(stderr, "Failed to write pcap packet data\n");
+			return -1;
+		}
+		
+		// 立即刷新到磁盘
+		fflush(hctx->pcap_file);
 	}
 	
 	return 0;
@@ -97,10 +154,14 @@ int main(int argc, char **argv) {
 	struct ring_buffer *rb;
 	int ifindex, err;
 	int watchdog_fd;
+	FILE *pcap_file = NULL;
+	unsigned long packet_count = 0;
+	struct handler_ctx hctx = {0};
 	
-	if (argc != 2) {
-		fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
+	if (argc < 2 || argc > 3) {
+		fprintf(stderr, "Usage: %s <interface> [output.pcap]\n", argv[0]);
 		fprintf(stderr, "Example: %s eth0\n", argv[0]);
+		fprintf(stderr, "Example: %s eth0 capture.pcap\n", argv[0]);
 		return 1;
 	}
 	
@@ -109,6 +170,39 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Invalid interface: %s\n", argv[1]);
 		return 1;
 	}
+	
+	// 如果指定了输出文件，打开并写入 PCAP 文件头
+	if (argc == 3) {
+		pcap_file = fopen(argv[2], "wb");
+		if (!pcap_file) {
+			fprintf(stderr, "Failed to open output file: %s\n", argv[2]);
+			return 1;
+		}
+		
+		// 写入 PCAP 文件头
+		struct pcap_file_header fh = {
+			.magic = 0xa1b2c3d4,
+			.version_major = 2,
+			.version_minor = 4,
+			.thiszone = 0,
+			.sigfigs = 0,
+			.snaplen = 65535,
+			.linktype = 1  // DLT_EN10MB (Ethernet)
+		};
+		
+		if (fwrite(&fh, sizeof(fh), 1, pcap_file) != 1) {
+			fprintf(stderr, "Failed to write pcap file header\n");
+			fclose(pcap_file);
+			return 1;
+		}
+		fflush(pcap_file);
+		
+		fprintf(stderr, "Writing packets to: %s\n", argv[2]);
+	}
+	
+	// 设置回调上下文
+	hctx.pcap_file = pcap_file;
+	hctx.packet_count = &packet_count;
 	
 	libbpf_set_print(libbpf_print_fn);
 	
@@ -268,7 +362,7 @@ int main(int argc, char **argv) {
 	}
 	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x1)\n");
 	
-	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, NULL, NULL);
+	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, &hctx, NULL);
 	if (!rb) {
 		fprintf(stderr, "Failed to create ring buffer\n");
 		goto cleanup_detach;
@@ -276,7 +370,10 @@ int main(int argc, char **argv) {
 	
 	printf("\n");
 	printf("=======================================================\n");
-	printf("Capturing packets on %s (first %d bytes)\n", argv[1], CAPTURE_LEN);
+	printf("Capturing packets on %s (up to %d bytes per packet)\n", argv[1], CAPTURE_LEN);
+	if (pcap_file) {
+		printf("Saving to: %s\n", argv[2]);
+	}
 	printf("Press Ctrl+C to stop\n");
 	printf("=======================================================\n");
 	
@@ -340,6 +437,10 @@ cleanup_detach:
 	}
 	
 cleanup:
+	if (pcap_file) {
+		fclose(pcap_file);
+		printf("PCAP file saved: %s (%lu packets)\n", argv[2], packet_count);
+	}
 	ring_buffer__free(rb);
 	pktcap_bpf__destroy(skel);
 	printf("Done.\n");

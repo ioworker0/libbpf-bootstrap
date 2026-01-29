@@ -5,7 +5,7 @@
 
 #define ETH_P_IP 0x0800
 #define TC_ACT_UNSPEC (-1) // 默认行为，让后续程序继续处理
-#define CAPTURE_LEN 128  // 抓取前128字节
+#define CAPTURE_LEN 1500  // 增加到 1500 字节（标准 MTU）
 
 struct packet_event {
 	__u32 src_ip;
@@ -13,9 +13,10 @@ struct packet_event {
 	__u16 src_port;
 	__u16 dst_port;
 	__u8  protocol;
-	__u16 total_len;
-	__u16 data_len;  // 实际抓取的数据长度
-	__u8  data[CAPTURE_LEN];  // 包内容
+	__u8  _padding[3]; // 调整填充
+	__u32 total_len;   // 使用 u32
+	__u16 data_len;    // 实际捕获长度
+	__u8  data[CAPTURE_LEN];
 };
 
 struct {
@@ -71,9 +72,12 @@ int plux_packet_capture(struct __sk_buff *skb)
 	evt->src_ip = ip->saddr;
 	evt->dst_ip = ip->daddr;
 	evt->protocol = ip->protocol;
-	evt->total_len = bpf_ntohs(ip->tot_len);
 	evt->src_port = 0;
 	evt->dst_port = 0;
+	
+	// 使用 skb->len 获取完整的包长度（包括以太网头）作为原始长度
+	// ip->tot_len 只是 IP 包长度
+	evt->total_len = skb->len;
 	
 	// 解析端口
 	if (ip->protocol == 6 || ip->protocol == 17) {  // TCP or UDP
@@ -84,22 +88,18 @@ int plux_packet_capture(struct __sk_buff *skb)
 		}
 	}
 	
-	// 复制包数据（从 IP 头开始）
-	capture_len = evt->total_len;
+	// 复制完整的以太网帧（从 eth 开始）
+	capture_len = data_end - data;  // 完整数据包长度
 	if (capture_len > CAPTURE_LEN)
 		capture_len = CAPTURE_LEN;
 	
-	// 边界检查
-	if ((void *)ip + capture_len > data_end)
-		capture_len = data_end - (void *)ip;
-	
 	evt->data_len = capture_len;
 	
-	// 复制数据
+	// 复制数据（从以太网头开始）
 	for (int i = 0; i < CAPTURE_LEN && i < capture_len; i++) {
-		if ((void *)ip + i + 1 > data_end)
+		if ((void *)(((__u8 *)data) + i) >= data_end)
 			break;
-		evt->data[i] = *(((__u8 *)ip) + i);
+		evt->data[i] = *(((__u8 *)data) + i);
 	}
 	
 	bpf_ringbuf_submit(evt, 0);
