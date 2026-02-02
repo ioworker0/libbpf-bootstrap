@@ -8,6 +8,10 @@
 #define TC_ACT_UNSPEC (-1) // 默认行为，让后续程序继续处理
 #define CAPTURE_LEN 1500  // 增加到 1500 字节（标准 MTU）
 
+// RateLimit 配置变量（const volatile，用户态通过 skel->rodata 设置）
+const volatile __u64 __bpf_ratelimit_interval = 1;  // 时间窗口（秒）
+const volatile __u64 __bpf_ratelimit_burst = 100;   // 每个 interval 最多事件数
+
 struct packet_event {
 	__u32 src_ip;
 	__u32 dst_ip;
@@ -46,7 +50,7 @@ int plux_packet_capture(struct __sk_buff *skb)
 	__u16 capture_len;
 
 	// RateLimit: 限制抓包速率，防止 ringbuf 溢出和用户态过载
-	if (bpf_ratelimit_check())
+	if (bpf_ratelimit_check(__bpf_ratelimit_interval, __bpf_ratelimit_burst))
 		return TC_ACT_UNSPEC;
 
 	// Watchdog 检查：如果用户态程序挂了，自动放行所有流量

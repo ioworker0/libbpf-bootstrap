@@ -10,8 +10,6 @@
 #include <bpf/bpf.h>
 #include <ctype.h>
 #include "pktcap.skel.h"
-#include "plux/bpf_ratelimit.h"
-#include "plux/bpf_ratelimit_user.h"
 
 static volatile sig_atomic_t exiting = 0;
 
@@ -224,7 +222,8 @@ int main(int argc, char **argv) {
 	}
 
 	// 配置 RateLimit：load 之前设置 const 全局变量
-	BPF_RATELIMIT_SET(skel, 1, 100);
+	skel->rodata->__bpf_ratelimit_interval = 1;
+	skel->rodata->__bpf_ratelimit_burst = 100;
 	fprintf(stderr, "RateLimit configured: interval=1 s, burst=100 pkts/s\n");
 
 	err = pktcap_bpf__load(skel);

@@ -3,140 +3,44 @@
 
 #include <bpf/bpf_helpers.h>
 
-struct bpf_ratelimit {
-	uint64_t interval; // unit: second
-	uint64_t begin;
-	uint64_t burst;     // max events/interval
-	uint64_t max_burst; // max burst
-	uint64_t events;    // current events/interval
-	uint64_t nmissed;   // missed events/interval
-
-	uint64_t total_events;   // total events
-	uint64_t total_nmissed;  // total missed events
-	uint64_t total_interval; // total interval
-};
-
-#define BPF_RATELIMIT(name, interval, burst) \
-	struct bpf_ratelimit name = {interval, 0, burst, 0, 0, 0, 0, 0, 0}
-
-// bpf_ratelimited: whether the threshold is exceeded
-//
-// @rate: struct bpf_ratelimit *
-// @return:
-//   true: the threshold is exceeded
-//   false: the threshold is not exceeded
-static __always_inline bool bpf_ratelimited(struct bpf_ratelimit *rate)
-{
-	// validate
-	if (rate == NULL || rate->interval == 0)
-		return false;
-
-	u64 curr = bpf_ktime_get_ns() / 1000000000;
-
-	if (rate->begin == 0)
-		rate->begin = curr;
-
-	if (curr > rate->begin + rate->interval) {
-		__sync_fetch_and_add(&rate->total_interval, curr - rate->begin);
-		rate->begin  = curr;
-		rate->events = rate->nmissed = 0;
-	}
-
-	if (rate->burst && rate->burst > rate->events) {
-		__sync_fetch_and_add(&rate->events, 1);
-		__sync_fetch_and_add(&rate->total_events, 1);
-		return false;
-	}
-
-	__sync_fetch_and_add(&rate->nmissed, 1);
-	__sync_fetch_and_add(&rate->total_nmissed, 1);
-	return true;
-}
-
-#define BPF_RATELIMIT_IN_MAP(name, interval, burst, max_burst) \
-	struct { \
-		__uint(type, BPF_MAP_TYPE_ARRAY); \
-		__uint(key_size, sizeof(u32)); \
-		__uint(value_size, sizeof(struct bpf_ratelimit)); \
-		__uint(max_entries, 1); \
-	} bpf_rlimit_##name SEC(".maps"); \
-	struct { \
-		__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY); \
-		__uint(key_size, sizeof(int)); \
-		__uint(value_size, sizeof(u32)); \
-	} event_bpf_rlimit_##name SEC(".maps"); \
-	volatile const struct bpf_ratelimit ___bpf_rlimit_cfg_##name = { \
-		interval, 0, burst, max_burst, 0, 0, 0, 0, 0}
-
-// bpf_ratelimited_in_map: whether the threshold is exceeded
-//
-// @rate: struct bpf_ratelimit *
-// @return:
-//   true: the threshold is exceeded
-//   false: the threshold is not exceeded
-#define bpf_ratelimited_in_map(ctx, rate) \
-	bpf_ratelimited_core_in_map(ctx, &bpf_rlimit_##rate, \
-				    &event_bpf_rlimit_##rate, \
-				    &___bpf_rlimit_cfg_##rate)
-
-static __always_inline bool
-bpf_ratelimited_core_in_map(void *ctx, void *map, void *perf_map,
-			    const volatile struct bpf_ratelimit *cfg)
-{
-	u32 key               = 0;
-	struct bpf_ratelimit *rate = NULL;
-
-	rate = bpf_map_lookup_elem(map, &key);
-	if (rate == NULL)
-		return false;
-
-	// init from cfg
-	if (rate->interval == 0) {
-		rate->interval = cfg->interval;
-		rate->burst = cfg->burst;
-		rate->max_burst = cfg->max_burst;
-	}
-
-	// the threshold is not exceeded, return false
-	u64 old_nmissed = rate->nmissed;
-	if (!bpf_ratelimited(rate))
-		return false;
-
-	// the threshold/max_burst is exceeded, notify once in a cycle
-	if (old_nmissed == 0 || (rate->max_burst > 0 &&
-			 rate->nmissed > rate->max_burst - rate->burst))
-		bpf_perf_event_output(ctx, perf_map, BPF_F_CURRENT_CPU, rate,
-				      sizeof(struct bpf_ratelimit));
-	return true;
-}
-
 // ====================================================================
-// 通用版本：配置由用户态启动时设置到 const 全局变量
+// 简化版：BPF 程序传入 interval 和 burst 参数
 // ====================================================================
+//
+// BPF 程序中需要定义：
+//
+//   // 配置变量（const volatile，用户态通过 skel->rodata 设置）
+//   const volatile __u64 __bpf_ratelimit_interval = 1;  // 时间窗口（秒）
+//   const volatile __u64 __bpf_ratelimit_burst = 100;   // 每个 interval 最多事件数
+//
+// 使用方式：
+//   if (bpf_ratelimit_check(__bpf_ratelimit_interval, __bpf_ratelimit_burst))
+//       return;  // 限流，丢弃
+//   // 允许通过
 
-// 配置变量（const volatile，用户态启动时设置）
-const volatile __u64 __bpf_ratelimit_interval = 1;
-const volatile __u64 __bpf_ratelimit_burst = 100;
+// 状态变量（存储在 bss 段）
+struct {
+	__u64 begin;   // 当前窗口开始时间（秒）
+	__u64 events;  // 当前窗口已处理事件数
+} __bpf_ratelimit = {.begin = 0, .events = 0};
 
-// 状态变量（使用 struct bpf_ratelimit 存储 last_time 和 count）
-// begin -> last_time, events -> count
-struct bpf_ratelimit __bpf_ratelimit = {.begin = 0, .events = 0};
-
-// 通用限流检查函数（无参数，直接使用全局变量）
-// @return: true=限流(丢弃), false=允许
-static __always_inline bool bpf_ratelimit_check(void)
+// bpf_ratelimit_check: 限流检查
+// @interval: 时间窗口（秒）
+// @burst: 每个 interval 最多事件数
+// @return: true=限流(丢弃), false=允许通过
+static __always_inline bool bpf_ratelimit_check(__u64 interval, __u64 burst)
 {
-	if (__bpf_ratelimit_interval == 0 || __bpf_ratelimit_burst == 0)
+	if (interval == 0 || burst == 0)
 		return false;  // 未配置，允许通过
 
-	__u64 now = bpf_ktime_get_ns() / 1000000000;
+	__u64 now = bpf_ktime_get_ns() / 1000000000ULL;
 
-	if (now >= __bpf_ratelimit.begin + __bpf_ratelimit_interval) {
+	if (now >= __bpf_ratelimit.begin + interval) {
 		__bpf_ratelimit.begin = now;
 		__bpf_ratelimit.events = 0;
 	}
 
-	if (__bpf_ratelimit.events < __bpf_ratelimit_burst) {
+	if (__bpf_ratelimit.events < burst) {
 		__sync_fetch_and_add(&__bpf_ratelimit.events, 1);
 		return false;  // 允许
 	}
