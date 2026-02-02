@@ -221,7 +221,11 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Failed to open BPF skeleton\n");
 		return 1;
 	}
-	
+
+	// 配置 RateLimit：load 之前设置 const 全局变量
+	BPF_RATELIMIT_SET(skel, 1, 100);
+	fprintf(stderr, "RateLimit configured: interval=1 s, burst=100 pkts/s\n");
+
 	err = pktcap_bpf__load(skel);
 	if (err) {
 		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
@@ -229,12 +233,6 @@ int main(int argc, char **argv) {
 	}
 
 	fprintf(stderr, "BPF program loaded\n");
-
-	// 配置 RateLimit：启动时设置 const 全局变量
-	bpf_ratelimit_set(skel->maps.__bpf_ratelimit_interval,
-	                 skel->maps.__bpf_ratelimit_burst,
-	                 1, 100);
-	fprintf(stderr, "RateLimit configured: interval=1 s, burst=100 pkts/s\n");
 
 	// 获取 watchdog map fd
 	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);

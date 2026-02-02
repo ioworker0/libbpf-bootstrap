@@ -3,19 +3,15 @@
 
 #include <bpf/bpf.h>
 
-// 设置 bpf_ratelimit 配置
-// @interval_map: __bpf_ratelimit_interval map
-// @burst_map: __bpf_ratelimit_burst map
-// @interval: 时间窗口（秒）
-// @burst: 每个 interval 最多事件数
-static inline void bpf_ratelimit_set(struct bpf_map *interval_map,
-                                      struct bpf_map *burst_map,
-                                      __u64 interval, __u64 burst)
-{
-	if (interval_map)
-		bpf_map_update_elem(bpf_map__fd(interval_map), NULL, &interval, BPF_ANY);
-	if (burst_map)
-		bpf_map_update_elem(bpf_map__fd(burst_map), NULL, &burst, BPF_ANY);
-}
+// BPF_RATELIMIT_SET: 设置 bpf_ratelimit 配置宏
+// 必须在 xxx__load() 之前调用，因为 const volatile 变量加载后不可修改
+//
+// 使用方式:
+//   BPF_RATELIMIT_SET(skel, 1, 100);  // interval=1s, burst=100
+#define BPF_RATELIMIT_SET(skel, interval, burst) \
+	do { \
+		(skel)->rodata->__bpf_ratelimit_interval = (interval); \
+		(skel)->rodata->__bpf_ratelimit_burst = (burst); \
+	} while (0)
 
 #endif /* __BPF_RATELIMIT_USER_H__ */
