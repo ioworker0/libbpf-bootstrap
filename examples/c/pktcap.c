@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <unistd.h>
 #include <time.h>
 #include <arpa/inet.h>
@@ -10,8 +9,8 @@
 #include <bpf/bpf.h>
 #include <ctype.h>
 #include "pktcap.skel.h"
-
-static volatile sig_atomic_t exiting = 0;
+#include "plux/init.h"
+#include "plux/btf.h"
 
 #define CAPTURE_LEN 1500
 
@@ -51,8 +50,6 @@ struct handler_ctx {
 	FILE *pcap_file;
 	unsigned long *packet_count;
 };
-
-static void sig_int(int signo) { exiting = 1; }
 
 static const char *proto_name(__u8 proto) {
 	switch(proto) {
@@ -157,7 +154,9 @@ int main(int argc, char **argv) {
 	FILE *pcap_file = NULL;
 	unsigned long packet_count = 0;
 	struct handler_ctx hctx = {0};
-	
+
+	plux_init();
+
 	if (argc < 2 || argc > 3) {
 		fprintf(stderr, "Usage: %s <interface> [output.pcap]\n", argv[0]);
 		fprintf(stderr, "Example: %s eth0\n", argv[0]);
@@ -205,17 +204,9 @@ int main(int argc, char **argv) {
 	hctx.packet_count = &packet_count;
 	
 	libbpf_set_print(libbpf_print_fn);
-	
-	const char *btf_path = "/plux/btf/kernel.btf";
-	if (access(btf_path, R_OK) == 0) {
-		fprintf(stderr, "Found custom BTF at %s\n", btf_path);
-		LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
-		skel = pktcap_bpf__open_opts(&opts);
-	} else {
-		fprintf(stderr, "Using system BTF\n");
-		skel = pktcap_bpf__open();
-	}
-	
+
+	skel = PLUX_BTF_TRY_OPEN_BEFORE_LOAD(skel, pktcap);
+
 	if (!skel) {
 		fprintf(stderr, "Failed to open BPF skeleton\n");
 		return 1;
@@ -381,11 +372,7 @@ int main(int argc, char **argv) {
 	}
 	printf("Press Ctrl+C to stop\n");
 	printf("=======================================================\n");
-	
-	signal(SIGINT, sig_int);
-	signal(SIGTERM, sig_int);
-	signal(SIGHUP, sig_int);
-	
+
 	// 初始化心跳
 	__u32 key = 0;
 	struct timespec ts;
@@ -399,7 +386,7 @@ int main(int argc, char **argv) {
 	
 	// 主循环：轮询 ringbuf 并更新心跳
 	int poll_count = 0;
-	while (!exiting) {
+	while (!plux_signal_should_exit()) {
 		err = ring_buffer__poll(rb, 100);  // 100ms 超时
 		if (err < 0 && err != -EINTR) {
 			fprintf(stderr, "Error polling ring buffer: %d\n", err);
@@ -414,7 +401,7 @@ int main(int argc, char **argv) {
 			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
 				fprintf(stderr, "Failed to update watchdog\n");
-				exiting = 1;
+				plux_signal_exit();
 				break;
 			}
 		}
