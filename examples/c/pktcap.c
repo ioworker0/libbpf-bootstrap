@@ -10,6 +10,7 @@
 #include <bpf/bpf.h>
 #include <ctype.h>
 #include "pktcap.skel.h"
+#include "plux/bpf_ratelimit_user.h"
 
 static volatile sig_atomic_t exiting = 0;
 
@@ -226,9 +227,15 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
 		goto cleanup;
 	}
-	
+
 	fprintf(stderr, "BPF program loaded\n");
-	
+
+	// 配置 RateLimit：启动时设置 const 全局变量
+	bpf_ratelimit_set(skel->maps.__bpf_ratelimit_interval,
+	                 skel->maps.__bpf_ratelimit_burst,
+	                 1, 100);
+	fprintf(stderr, "RateLimit configured: interval=1 s, burst=100 pkts/s\n");
+
 	// 获取 watchdog map fd
 	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
 	if (watchdog_fd < 0) {

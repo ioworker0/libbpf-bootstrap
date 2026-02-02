@@ -2,6 +2,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include "plux/bpf_ratelimit.h"
 
 #define ETH_P_IP 0x0800
 #define TC_ACT_UNSPEC (-1) // 默认行为，让后续程序继续处理
@@ -43,7 +44,11 @@ int plux_packet_capture(struct __sk_buff *skb)
 	struct iphdr *ip;
 	struct packet_event *evt;
 	__u16 capture_len;
-	
+
+	// RateLimit: 限制抓包速率，防止 ringbuf 溢出和用户态过载
+	if (bpf_ratelimit_check())
+		return TC_ACT_UNSPEC;
+
 	// Watchdog 检查：如果用户态程序挂了，自动放行所有流量
 	__u32 key = 0;
 	__u64 *last_heartbeat = bpf_map_lookup_elem(&plux_watchdog, &key);

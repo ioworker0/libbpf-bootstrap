@@ -110,4 +110,38 @@ bpf_ratelimited_core_in_map(void *ctx, void *map, void *perf_map,
 	return true;
 }
 
+// ====================================================================
+// 通用版本：配置由用户态启动时设置到 const 全局变量
+// ====================================================================
+
+// 配置变量（const volatile，用户态启动时设置）
+const volatile __u64 __bpf_ratelimit_interval = 1;
+const volatile __u64 __bpf_ratelimit_burst = 100;
+
+// 状态变量（使用 struct bpf_ratelimit 存储 last_time 和 count）
+// begin -> last_time, events -> count
+struct bpf_ratelimit __bpf_ratelimit = {.begin = 0, .events = 0};
+
+// 通用限流检查函数（无参数，直接使用全局变量）
+// @return: true=限流(丢弃), false=允许
+static __always_inline bool bpf_ratelimit_check(void)
+{
+	if (__bpf_ratelimit_interval == 0 || __bpf_ratelimit_burst == 0)
+		return false;  // 未配置，允许通过
+
+	__u64 now = bpf_ktime_get_ns() / 1000000000;
+
+	if (now >= __bpf_ratelimit.begin + __bpf_ratelimit_interval) {
+		__bpf_ratelimit.begin = now;
+		__bpf_ratelimit.events = 0;
+	}
+
+	if (__bpf_ratelimit.events < __bpf_ratelimit_burst) {
+		__sync_fetch_and_add(&__bpf_ratelimit.events, 1);
+		return false;  // 允许
+	}
+
+	return true;  // 限流
+}
+
 #endif /* __BPF_RATELIMIT_H__ */
