@@ -10,6 +10,7 @@
 #include <bpf/bpf.h>
 #include <ctype.h>
 #include "pktcap.skel.h"
+#include "plux/bpf_ratelimit.h"
 #include "plux/bpf_ratelimit_user.h"
 
 static volatile sig_atomic_t exiting = 0;
