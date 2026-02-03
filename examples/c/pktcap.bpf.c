@@ -3,14 +3,11 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include "plux/bpf_ratelimit.h"
+#include "plux/bpf_watchdog.h"
 
 #define ETH_P_IP 0x0800
 #define TC_ACT_UNSPEC (-1) // 默认行为，让后续程序继续处理
 #define CAPTURE_LEN 1500  // 增加到 1500 字节（标准 MTU）
-
-// RateLimit 配置变量（const volatile，用户态通过 skel->rodata 设置）
-const volatile __u64 __bpf_ratelimit_interval = 1;  // 时间窗口（秒）
-const volatile __u64 __bpf_ratelimit_burst = 100;   // 每个 interval 最多事件数
 
 struct packet_event {
 	__u32 src_ip;
@@ -29,16 +26,6 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } packets SEC(".maps");
 
-// Watchdog map: 用于检测用户态程序是否存活
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, __u64);  // 最后更新时间戳（纳秒）
-} plux_watchdog SEC(".maps");
-
-#define WATCHDOG_TIMEOUT_NS (10ULL * 1000000000ULL)  // 10 秒超时
-
 SEC("tc")
 int plux_packet_capture(struct __sk_buff *skb)
 {
@@ -50,20 +37,14 @@ int plux_packet_capture(struct __sk_buff *skb)
 	__u16 capture_len;
 
 	// RateLimit: 限制抓包速率，防止 ringbuf 溢出和用户态过载
-	if (bpf_ratelimit_check(__bpf_ratelimit_interval, __bpf_ratelimit_burst))
+	if (bpf_ratelimit_check())
 		return TC_ACT_UNSPEC;
 
-	// Watchdog 检查：如果用户态程序挂了，自动放行所有流量
-	__u32 key = 0;
-	__u64 *last_heartbeat = bpf_map_lookup_elem(&plux_watchdog, &key);
-	if (last_heartbeat) {
-		__u64 now = bpf_ktime_get_ns();
-		if (now - *last_heartbeat > WATCHDOG_TIMEOUT_NS) {
-			bpf_printk("plux_packet_capture: watchdog timeout, bypassing");
-			return TC_ACT_UNSPEC;  // 超时，放行
-		}
-	}
-	
+	// Watchdog: 如果用户态程序挂了，自动放行所有流量
+	if (bpf_watchdog_timed_out())
+		return TC_ACT_UNSPEC;
+
+
 	if ((void *)(eth + 1) > data_end)
 		return TC_ACT_UNSPEC;  // 放行，让后续程序继续处理
 	

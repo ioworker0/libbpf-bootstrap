@@ -139,13 +139,6 @@ static int handle_packet(void *ctx, void *data, size_t len) {
 	return 0;
 }
 
-static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
-{
-	if (level == LIBBPF_DEBUG)
-		return 0;
-	return vfprintf(stderr, format, args);
-}
-
 int main(int argc, char **argv) {
 	struct pktcap_bpf *skel;
 	struct ring_buffer *rb;
@@ -154,8 +147,6 @@ int main(int argc, char **argv) {
 	FILE *pcap_file = NULL;
 	unsigned long packet_count = 0;
 	struct handler_ctx hctx = {0};
-
-	plux_init();
 
 	if (argc < 2 || argc > 3) {
 		fprintf(stderr, "Usage: %s <interface> [output.pcap]\n", argv[0]);
@@ -202,9 +193,12 @@ int main(int argc, char **argv) {
 	// 设置回调上下文
 	hctx.pcap_file = pcap_file;
 	hctx.packet_count = &packet_count;
-	
-	libbpf_set_print(libbpf_print_fn);
 
+    // ------------------------------------------------
+	// STEP 1
+	plux_init();
+
+    // STEP 2
 	skel = PLUX_BTF_TRY_OPEN_BEFORE_LOAD(skel, pktcap);
 
 	if (!skel) {
@@ -212,11 +206,13 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	// STEP 3
 	// 配置 RateLimit：load 之前设置 const 全局变量
 	skel->rodata->__bpf_ratelimit_interval = 1;
 	skel->rodata->__bpf_ratelimit_burst = 100;
 	fprintf(stderr, "RateLimit configured: interval=1 s, burst=100 pkts/s\n");
 
+    // STEP 4
 	err = pktcap_bpf__load(skel);
 	if (err) {
 		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
@@ -225,8 +221,9 @@ int main(int argc, char **argv) {
 
 	fprintf(stderr, "BPF program loaded\n");
 
+	// STEP 5
 	// 获取 watchdog map fd
-	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
+	watchdog_fd = bpf_map__fd(skel->maps.__plux_watchdog);
 	if (watchdog_fd < 0) {
 		fprintf(stderr, "Failed to get watchdog map fd\n");
 		goto cleanup;
