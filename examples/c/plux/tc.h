@@ -23,9 +23,9 @@
 //   plux_tc_attach_prog(ifindex, BPF_TC_INGRESS, prog_fd, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
 //   plux_tc_attach_prog(ifindex, BPF_TC_EGRESS, prog_fd, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
 
-// 默认 TC filter 配置（plux_packet_capture 程序）
-#define PLUX_PKTCAP_PRIORITY  5   // plux_packet_capture 默认 priority
-#define PLUX_PKTCAP_HANDLE    1   // plux_packet_capture 默认 handle
+// 默认 TC filter 配置
+#define PLUX_PKTCAP_PRIORITY  5   // 默认 priority
+#define PLUX_PKTCAP_HANDLE    1   // 默认 handle
 
 // plux_tc_hook_create: 创建 TC qdisc（如果不存在）
 // @ifindex: 网卡 interface index
