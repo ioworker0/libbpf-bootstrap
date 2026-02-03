@@ -12,6 +12,7 @@
 #include "plux/init.h"
 #include "plux/btf.h"
 #include "plux/user_watchdog.h"
+#include "plux/tc.h"
 
 #define CAPTURE_LEN 1500
 
@@ -229,131 +230,47 @@ int main(int argc, char **argv) {
 		goto cleanup;
 	}
 
-	// 参考 egress_filter 的方式
-	// 设置 TC hook (ingress)
-	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_ingress,
-			    .ifindex = ifindex,
-			    .attach_point = BPF_TC_INGRESS);
-	
-	// 创建 qdisc (如果不存在)，忽略已存在错误
-	err = bpf_tc_hook_create(&tc_hook_ingress);
+	// ================================================================
+	// STEP 6 TC Ingress
+	// ================================================================
+	err = plux_tc_hook_create(ifindex, BPF_TC_INGRESS);
 	if (err && err != -EEXIST) {
-		fprintf(stderr, "Failed to create TC hook: %d\n", err);
+		fprintf(stderr, "Failed to create TC ingress hook: %d\n", err);
 		goto cleanup;
 	}
-	if (err == -EEXIST) {
-		fprintf(stderr, "TC qdisc already exists (created by Calico)\n");
-	}
-	
-	// Attach 前清理 ingress：删除旧的 plux_packet_capture 程序（priority 5）
-	fprintf(stderr, "Cleaning up old ingress filter at priority 5...\n");
-	
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts_ingress,
-			    .handle = 1,
-			    .priority = 5,
-			    .prog_fd = 0,
-			    .prog_id = 0,
-			    .flags = 0);
-	
-	err = bpf_tc_query(&tc_hook_ingress, &old_opts_ingress);
-	if (err == 0) {
-		fprintf(stderr, "  -> Found old ingress filter (handle=%u, prog_id=%u)\n", 
-		       old_opts_ingress.handle, old_opts_ingress.prog_id);
-		
-		old_opts_ingress.prog_fd = 0;
-		old_opts_ingress.prog_id = 0;
-		old_opts_ingress.flags = 0;
-		
-		err = bpf_tc_detach(&tc_hook_ingress, &old_opts_ingress);
-		if (err == 0) {
-			fprintf(stderr, "  -> Removed successfully\n");
-		} else {
-			fprintf(stderr, "  -> Failed to remove: %d (continuing anyway)\n", err);
-		}
-	} else {
-		fprintf(stderr, "  -> No old ingress filter with handle 1 found (err=%d)\n", err);
-		err = bpf_tc_detach(&tc_hook_ingress, &old_opts_ingress);
-		if (err == 0) {
-			fprintf(stderr, "  -> Detached handle 1 successfully (blind detach)\n");
-		} else if (err != -ENOENT) {
-			fprintf(stderr, "  -> Failed to detach handle 1: %d\n", err);
-		}
-	}
-	
-	// 设置 TC opts (ingress)
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_ingress,
-			    .handle = 1,
-			    .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.plux_packet_capture));
-	
-	// Attach 程序到 TC ingress
-	err = bpf_tc_attach(&tc_hook_ingress, &tc_opts_ingress);
+
+    // STEP 7
+	fprintf(stderr, "Cleaning up old ingress filter at priority %d...\n", PLUX_PKTCAP_PRIORITY);
+	plux_tc_cleanup(ifindex, BPF_TC_INGRESS, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
+
+    // STEP 8
+	err = plux_tc_attach_prog(ifindex, BPF_TC_INGRESS,
+				  bpf_program__fd(skel->progs.plux_packet_capture),
+				  PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
 	if (err) {
-		fprintf(stderr, "Failed to attach TC ingress: %d\n", err);
 		goto cleanup_detach;
 	}
-	fprintf(stderr, "Attached to ingress (priority: 5, handle: 0x1)\n");
-	
-	// 设置 TC hook (egress)
-	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_egress,
-			    .ifindex = ifindex,
-			    .attach_point = BPF_TC_EGRESS);
-	
-	// 创建 egress qdisc (如果不存在)
-	err = bpf_tc_hook_create(&tc_hook_egress);
+
+	// ================================================================
+	// STEP 9 TC Egress
+	// ================================================================
+	err = plux_tc_hook_create(ifindex, BPF_TC_EGRESS);
 	if (err && err != -EEXIST) {
 		fprintf(stderr, "Failed to create TC egress hook: %d\n", err);
 		goto cleanup_detach;
 	}
-	
-	// Attach 前清理 egress：删除旧的 plux_packet_capture 程序（priority 5）
-	fprintf(stderr, "Cleaning up old egress filter at priority 5...\n");
-	
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts_egress,
-			    .handle = 1,
-			    .priority = 5,
-			    .prog_fd = 0,
-			    .prog_id = 0,
-			    .flags = 0);
-	
-	err = bpf_tc_query(&tc_hook_egress, &old_opts_egress);
-	if (err == 0) {
-		fprintf(stderr, "  -> Found old egress filter (handle=%u, prog_id=%u)\n", 
-		       old_opts_egress.handle, old_opts_egress.prog_id);
-		
-		old_opts_egress.prog_fd = 0;
-		old_opts_egress.prog_id = 0;
-		old_opts_egress.flags = 0;
-		
-		err = bpf_tc_detach(&tc_hook_egress, &old_opts_egress);
-		if (err == 0) {
-			fprintf(stderr, "  -> Removed successfully\n");
-		} else {
-			fprintf(stderr, "  -> Failed to remove: %d (continuing anyway)\n", err);
-		}
-	} else {
-		fprintf(stderr, "  -> No old egress filter with handle 1 found (err=%d)\n", err);
-		err = bpf_tc_detach(&tc_hook_egress, &old_opts_egress);
-		if (err == 0) {
-			fprintf(stderr, "  -> Detached handle 1 successfully (blind detach)\n");
-		} else if (err != -ENOENT) {
-			fprintf(stderr, "  -> Failed to detach handle 1: %d\n", err);
-		}
-	}
-	
-	// 设置 TC opts (egress)
-	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts_egress,
-			    .handle = 1,
-			    .priority = 5,
-			    .prog_fd = bpf_program__fd(skel->progs.plux_packet_capture));
-	
-	// Attach 程序到 TC egress
-	err = bpf_tc_attach(&tc_hook_egress, &tc_opts_egress);
+
+    // STEP 10
+	fprintf(stderr, "Cleaning up old egress filter at priority %d...\n", PLUX_PKTCAP_PRIORITY);
+	plux_tc_cleanup(ifindex, BPF_TC_EGRESS, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
+
+    // STEP 11
+	err = plux_tc_attach_prog(ifindex, BPF_TC_EGRESS,
+				  bpf_program__fd(skel->progs.plux_packet_capture),
+				  PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
 	if (err) {
-		fprintf(stderr, "Failed to attach TC egress: %d\n", err);
 		goto cleanup_detach;
 	}
-	fprintf(stderr, "Attached to egress (priority: 5, handle: 0x1)\n");
 	
 	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, &hctx, NULL);
 	if (!rb) {
@@ -382,24 +299,10 @@ int main(int argc, char **argv) {
 	printf("\n\nDetaching...\n");
 
 cleanup_detach:
-	// Detach ingress
-	tc_opts_ingress.flags = 0;
-	tc_opts_ingress.prog_fd = 0;
-	tc_opts_ingress.prog_id = 0;
-	err = bpf_tc_detach(&tc_hook_ingress, &tc_opts_ingress);
-	if (err) {
-		fprintf(stderr, "Failed to detach TC ingress: %d\n", err);
-	}
-	
-	// Detach egress
-	tc_opts_egress.flags = 0;
-	tc_opts_egress.prog_fd = 0;
-	tc_opts_egress.prog_id = 0;
-	err = bpf_tc_detach(&tc_hook_egress, &tc_opts_egress);
-	if (err) {
-		fprintf(stderr, "Failed to detach TC egress: %d\n", err);
-	}
-	
+	// Detach TC filters
+	plux_tc_detach(ifindex, BPF_TC_INGRESS, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
+	plux_tc_detach(ifindex, BPF_TC_EGRESS, PLUX_PKTCAP_PRIORITY, PLUX_PKTCAP_HANDLE);
+
 cleanup:
 	if (pcap_file) {
 		fclose(pcap_file);
