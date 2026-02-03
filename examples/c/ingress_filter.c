@@ -10,7 +10,7 @@
 #include <net/if.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
-#include "egress_filter.skel.h"
+#include "ingress_filter.skel.h"
 
 static volatile sig_atomic_t exiting = 0;
 
@@ -28,7 +28,7 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 
 int main(int argc, char **argv)
 {
-	struct egress_filter_bpf *skel;
+	struct ingress_filter_bpf *skel;
 	int err;
 	int ifindex;
 	char *ifname;
@@ -57,10 +57,10 @@ int main(int argc, char **argv)
 	if (access(btf_path, R_OK) == 0) {
 		printf("Found custom BTF at %s, using it.\n", btf_path);
 		LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
-		skel = egress_filter_bpf__open_opts(&opts);
+		skel = ingress_filter_bpf__open_opts(&opts);
 	} else {
 		printf("Custom BTF not found at %s. Letting libbpf find one automatically.\n", btf_path);
-		skel = egress_filter_bpf__open();
+		skel = ingress_filter_bpf__open();
 	}
 	
 	if (!skel) {
@@ -69,7 +69,7 @@ int main(int argc, char **argv)
 	}
 
 	// 加载 BPF 程序
-	err = egress_filter_bpf__load(skel);
+	err = ingress_filter_bpf__load(skel);
 	if (err) {
 		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
 		goto cleanup;
@@ -84,10 +84,10 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	// 设置 TC hook (egress) - veth 宿主机侧出口，过滤容器发出的包
+	// 设置 TC hook (ingress) - veth 宿主机侧入口，过滤进入容器的包
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
 			    .ifindex = ifindex,
-			    .attach_point = BPF_TC_EGRESS);
+			    .attach_point = BPF_TC_INGRESS);
 
 	// 创建 qdisc (如果不存在)，忽略已存在错误
 	err = bpf_tc_hook_create(&tc_hook);
@@ -99,7 +99,7 @@ int main(int argc, char **argv)
 		printf("TC qdisc already exists (created by Calico)\n");
 	}
 
-	// Attach 前清理：删除旧的 plux_egress_firewall 程序（priority 10，egress）
+	// Attach 前清理：删除旧的 plux_ingress_firewall 程序（priority 10，ingress）
 	printf("Cleaning up old filter at priority 10...\n");
 	
 	// 我们 attach 时固定用了 handle 1，所以这里也直接清理 handle 1
@@ -142,19 +142,19 @@ int main(int argc, char **argv)
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
 			    .handle = 1,
 			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
-			    .prog_fd = bpf_program__fd(skel->progs.plux_egress_firewall));
+			    .prog_fd = bpf_program__fd(skel->progs.plux_ingress_firewall));
 
-	// Attach 程序到 TC egress
+	// Attach 程序到 TC ingress
 	err = bpf_tc_attach(&tc_hook, &tc_opts);
 	if (err) {
 		fprintf(stderr, "Failed to attach TC program: %d\n", err);
 		goto cleanup;
 	}
 
-	printf("Successfully attached egress filter to %s (priority: %d)\n", ifname, tc_opts.priority);
-	printf("Blocking all container egress to destination IP: 111.63.65.103\n");
+	printf("Successfully attached ingress filter to %s (priority: %d)\n", ifname, tc_opts.priority);
+	printf("Blocking all ingress from source IP: 111.63.65.103\n");
 	printf("Press Ctrl+C to detach and exit...\n");
-	printf("\nYou can verify with: tc filter show dev %s egress\n", ifname);
+	printf("\nYou can verify with: tc filter show dev %s ingress\n", ifname);
 	printf("To see logs: sudo cat /sys/kernel/debug/tracing/trace_pipe\n\n");
 
 	// 注册信号处理
@@ -204,7 +204,7 @@ cleanup_detach:
 
 cleanup:
 	printf("Cleaning up...\n");
-	egress_filter_bpf__destroy(skel);
+	ingress_filter_bpf__destroy(skel);
 	printf("Done.\n");
 	return err ? 1 : 0;
 }
