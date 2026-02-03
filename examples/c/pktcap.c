@@ -11,6 +11,7 @@
 #include "pktcap.skel.h"
 #include "plux/init.h"
 #include "plux/btf.h"
+#include "plux/user_watchdog.h"
 
 #define CAPTURE_LEN 1500
 
@@ -143,7 +144,6 @@ int main(int argc, char **argv) {
 	struct pktcap_bpf *skel;
 	struct ring_buffer *rb;
 	int ifindex, err;
-	int watchdog_fd;
 	FILE *pcap_file = NULL;
 	unsigned long packet_count = 0;
 	struct handler_ctx hctx = {0};
@@ -222,13 +222,13 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "BPF program loaded\n");
 
 	// STEP 5
-	// 获取 watchdog map fd
-	watchdog_fd = bpf_map__fd(skel->maps.__plux_watchdog);
-	if (watchdog_fd < 0) {
-		fprintf(stderr, "Failed to get watchdog map fd\n");
+	// 获取 watchdog map fd 并启动 watchdog 线程
+	err = plux_watchdog_start(bpf_map__fd(skel->maps.__plux_watchdog), 1);
+	if (err) {
+		fprintf(stderr, "Failed to start watchdog thread\n");
 		goto cleanup;
 	}
-	
+
 	// 参考 egress_filter 的方式
 	// 设置 TC hook (ingress)
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook_ingress,
@@ -370,40 +370,15 @@ int main(int argc, char **argv) {
 	printf("Press Ctrl+C to stop\n");
 	printf("=======================================================\n");
 
-	// 初始化心跳
-	__u32 key = 0;
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	__u64 now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
-	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
-		fprintf(stderr, "Failed to initialize watchdog\n");
-		goto cleanup_detach;
-	}
-	fprintf(stderr, "Watchdog initialized (timeout: 30s, update interval: 1s)\n");
-	
-	// 主循环：轮询 ringbuf 并更新心跳
-	int poll_count = 0;
+	// 主循环：轮询 ringbuf（watchdog 由独立线程处理）
 	while (!plux_signal_should_exit()) {
 		err = ring_buffer__poll(rb, 100);  // 100ms 超时
 		if (err < 0 && err != -EINTR) {
 			fprintf(stderr, "Error polling ring buffer: %d\n", err);
 			break;
 		}
-		
-		// 每 10 次轮询（约 1 秒）更新一次心跳
-		poll_count++;
-		if (poll_count >= 10) {
-			poll_count = 0;
-			clock_gettime(CLOCK_MONOTONIC, &ts);
-			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
-			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
-				fprintf(stderr, "Failed to update watchdog\n");
-				plux_signal_exit();
-				break;
-			}
-		}
 	}
-	
+
 	printf("\n\nDetaching...\n");
 
 cleanup_detach:

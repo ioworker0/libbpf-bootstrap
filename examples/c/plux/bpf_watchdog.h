@@ -33,7 +33,7 @@ static __always_inline bool bpf_watchdog_timed_out(void)
 	__u64 *last_heartbeat = bpf_map_lookup_elem(&__plux_watchdog, &key);
 
 	if (!last_heartbeat)
-		return false;  // map 未初始化，认为正常
+		return true;  // map 未初始化，认为不正常
 
 	__u64 now = bpf_ktime_get_ns();
 	if (now - *last_heartbeat > __bpf_watchdog_timeout_ns)
