@@ -58,7 +58,7 @@ static int handle_packet_socket(void *ctx, void *data, size_t len);
 static void print_hex_dump(const __u8 *data, __u16 len);
 static int parse_tcpktcap_config_args(int argc, char *argv[], struct tcpktcap_config *config);
 
-static ring_buffer_sample_fn_t g_handle_packet;
+static ring_buffer_sample_fn g_handle_packet;
 
 // Socket 连接（Agent 模式）
 static struct socket_protocol g_socket;
