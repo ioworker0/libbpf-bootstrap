@@ -289,6 +289,16 @@ int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_d
     return socket_send_raw_message(sp, MSG_TYPE_STACKTRACE, json_buf, strlen(json_buf));
 }
 
+/* Send packet data message */
+int socket_send_packet(struct socket_protocol *sp, const struct packet_data *packet)
+{
+    if (!sp || !packet) {
+        return -1;
+    }
+
+    return socket_send_raw_message(sp, MSG_TYPE_PACKET, (const char *)packet, sizeof(*packet));
+}
+
 /* Send log info message */
 int socket_send_log_info(struct socket_protocol *sp, const char *message)
 {

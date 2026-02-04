@@ -13,6 +13,7 @@
 #define MSG_TYPE_LOGS_ERROR 0x0006  /* 错误日志 */
 #define MSG_TYPE_HANDSHAKE  0x0007  /* 握手确认 */
 #define MSG_TYPE_STACKTRACE 0x0008  /* 堆栈跟踪 */
+#define MSG_TYPE_PACKET     0x0009  /* 数据包捕获 */
 
 /* Protocol frame format: [2 bytes: msg_type][4 bytes: data_len][N bytes: data] */
 #define FRAME_HEADER_SIZE 6
@@ -66,6 +67,13 @@ struct tcp_drop_stacktrace_data {
     uint8_t tcp_flags;        /* TCP flags */
     uint32_t depth;           /* 堆栈深度 */
     uint64_t addresses[MAX_STACK_DEPTH];  /* 堆栈地址数组 */
+};
+
+/* Packet capture data structure */
+#define PACKET_CAPTURE_LEN 1600
+struct packet_data {
+    uint16_t data_len;        /* 实际有效数据长度 */
+    uint8_t  data[PACKET_CAPTURE_LEN];  /* 原始包数据（以太网帧） */
 };
 
 /* Pack frame header for sending */

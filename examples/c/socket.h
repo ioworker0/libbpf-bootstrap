@@ -51,6 +51,9 @@ int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t
 /* Send stacktrace message */
 int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_data *stacktrace);
 
+/* Send packet data message */
+int socket_send_packet(struct socket_protocol *sp, const struct packet_data *packet);
+
 /* Send log messages */
 int socket_send_log_info(struct socket_protocol *sp, const char *message);
 int socket_send_log_warn(struct socket_protocol *sp, const char *message);

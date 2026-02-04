@@ -15,6 +15,8 @@
 #include "plux/btf.h"
 #include "plux/user_watchdog.h"
 #include "plux/tc.h"
+#include "socket.h"
+#include "config.h"
 #include "cJSON.h"
 
 #define CAPTURE_LEN 1600   // veth MTU 默认 1500 + 以太网头 14 + VLAN 8 = 1522，1600 有余量
@@ -51,9 +53,15 @@ struct packet_event {
 	__u8  data[CAPTURE_LEN];
 };
 
-static int handle_packet(void *ctx, void *data, size_t len);
+static int handle_packet_print(void *ctx, void *data, size_t len);
+static int handle_packet_socket(void *ctx, void *data, size_t len);
 static void print_hex_dump(const __u8 *data, __u16 len);
 static int parse_config_args(int argc, char *argv[], struct tcpktcap_config *config);
+
+static ring_buffer_sample_fn_t g_handle_packet;
+
+// Socket 连接（Agent 模式）
+static struct socket_protocol g_socket;
 
 int main(int argc, char **argv)
 {
@@ -65,6 +73,21 @@ int main(int argc, char **argv)
 	err = parse_config_args(argc, argv, &g_config);
 	if (err) {
 		return 1;
+	}
+
+	// 根据 socket_path 设置 packet 处理函数
+	if (g_config.socket_path[0] != '\0') {
+		g_handle_packet = handle_packet_socket;
+
+		err = plux_agent_socket_init(&g_socket, g_config.socket_path, "plux-tcpktcap");
+		if (err) {
+			return 1;
+		}
+
+		fprintf(stderr, "Agent mode: sending packets to socket\n");
+	} else {
+		g_handle_packet = handle_packet_print;
+		fprintf(stderr, "Standalone mode: printing packets\n");
 	}
 
 	// 确定要使用的 interface（必须从 config 中获取）
@@ -161,7 +184,7 @@ int main(int argc, char **argv)
 		goto cleanup_detach;
 	}
 
-	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), handle_packet, NULL, NULL);
+	rb = ring_buffer__new(bpf_map__fd(skel->maps.packets), g_handle_packet, NULL, NULL);
 	if (!rb) {
 		fprintf(stderr, "Failed to create ring buffer\n");
 		goto cleanup_detach;
@@ -222,12 +245,25 @@ static void print_hex_dump(const __u8 *data, __u16 len)
 	}
 }
 
-static int handle_packet(void *ctx, void *data, size_t len)
+static int handle_packet_print(void *ctx, void *data, size_t len)
 {
 	struct packet_event *pkt = data;
 
 	printf("\nlen=%u\n", pkt->data_len);
 	print_hex_dump(pkt->data, pkt->data_len > MAX_PRINT_LEN ? MAX_PRINT_LEN : pkt->data_len);
+
+	return 0;
+}
+
+static int handle_packet_socket(void *ctx, void *data, size_t len)
+{
+	struct packet_event *pkt = data;
+
+	// 直接发送，packet_event 和 packet_data 结构相同
+	if (socket_send_packet(&g_socket, (struct packet_data *)pkt) < 0) {
+		fprintf(stderr, "Failed to send packet to socket\n");
+		return -1;
+	}
 
 	return 0;
 }
@@ -241,6 +277,9 @@ static int parse_config_args(int argc, char *argv[], struct tcpktcap_config *con
 
 	if (argc > 1)
 		fprintf(stderr, "%s: Parsing config arguments...\n", argv[1]);
+
+	if (argc > 2)
+		fprintf(stderr, "%s: Parsing config arguments...\n", argv[2]);
 
 	if (!config)
 		return -1;
