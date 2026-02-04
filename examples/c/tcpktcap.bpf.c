@@ -101,8 +101,11 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 
 	// 填充数据并提交
 	evt->data_len = capture_len;
-	for (int i = 0; i < capture_len; i++)
-		evt->data[i] = ((__u8 *)data)[i];
+	for (int i = 0; i < CAPTURE_LEN && i < capture_len; i++) {
+		if ((void *)(((__u8 *)data) + i) >= data_end)
+			break;
+		evt->data[i] = *(((__u8 *)data) + i);
+	}
 	bpf_ringbuf_submit(evt, 0);
 
 	return TC_ACT_UNSPEC;  // 放行流量
