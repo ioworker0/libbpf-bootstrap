@@ -56,7 +56,7 @@ struct packet_event {
 static int handle_packet_print(void *ctx, void *data, size_t len);
 static int handle_packet_socket(void *ctx, void *data, size_t len);
 static void print_hex_dump(const __u8 *data, __u16 len);
-static int parse_config_args(int argc, char *argv[], struct tcpktcap_config *config);
+static int parse_tcpktcap_config_args(int argc, char *argv[], struct tcpktcap_config *config);
 
 static ring_buffer_sample_fn_t g_handle_packet;
 
@@ -70,7 +70,7 @@ int main(int argc, char **argv)
 	int ifindex, err;
 
 	// 解析配置参数
-	err = parse_config_args(argc, argv, &g_config);
+	err = parse_tcpktcap_config_args(argc, argv, &g_config);
 	if (err) {
 		return 1;
 	}
@@ -269,7 +269,7 @@ static int handle_packet_socket(void *ctx, void *data, size_t len)
 }
 
 // 解析命令行参数 --config "json_string"
-static int parse_config_args(int argc, char *argv[], struct tcpktcap_config *config)
+static int parse_tcpktcap_config_args(int argc, char *argv[], struct tcpktcap_config *config)
 {
 	const char *config_str = NULL;
 	cJSON *json = NULL;
