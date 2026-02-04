@@ -296,9 +296,8 @@ int socket_send_packet(struct socket_protocol *sp, const struct packet_data *pac
         return -1;
     }
 
-    // 只发送: data_len (2字节) + 实际数据
-    uint32_t send_len = sizeof(packet->data_len) + packet->data_len;
-    return socket_send_raw_message(sp, MSG_TYPE_PACKET, (const char *)packet, send_len);
+    // 只发送实际包数据，frame header 已有长度信息
+    return socket_send_raw_message(sp, MSG_TYPE_PACKET, (const char *)packet->data, packet->data_len);
 }
 
 /* Send log info message */
