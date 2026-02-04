@@ -49,8 +49,8 @@ static inline void plux_init(void)
 //   plux_agent_socket_init(&sock, "/path/to/socket", "plugin-name");
 //
 
-#include "socket.h"
-#include "config.h"
+#include "../socket.h"
+#include "../config.h"
 
 // plux_agent_socket_init: 初始化 Agent Socket 连接
 // - 初始化 socket 协议
