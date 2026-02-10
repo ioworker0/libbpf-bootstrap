@@ -72,7 +72,7 @@ struct tcp_drop_stacktrace_data {
 /* Packet capture data structure */
 #define PACKET_CAPTURE_LEN 1600
 struct packet_data {
-    uint16_t data_len;        /* 实际有效数据长度 */
+    uint32_t data_len;        /* 实际有效数据长度 */
     /* 5元组信息（固定位置） */
     uint32_t src_ip;          /* 源IP地址（网络字节序） */
     uint32_t dst_ip;          /* 目标IP地址（网络字节序） */

@@ -12,7 +12,7 @@
 
 // 传递到用户态的数据包事件
 struct packet_event {
-	__u16 data_len;           // 实际捕获长度
+	__u32 data_len;           // 实际捕获长度
 	// 5元组信息（固定位置）
 	__u32 src_ip;             // 源IP地址（网络字节序）
 	__u32 dst_ip;             // 目标IP地址（网络字节序）
