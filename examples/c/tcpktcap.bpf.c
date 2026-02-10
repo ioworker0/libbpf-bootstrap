@@ -33,13 +33,22 @@ struct {
 // 0 表示不过滤该字段
 const volatile __u32 filter_ip = 0;
 const volatile __u16 filter_port = 0;
-const volatile __u8 filter_mode = 0;  // 0=AND(全部匹配), 1=OR(任一匹配)
+const volatile __u8 filter_mode = 0;  // 0=AND(全部匹配), 1=OR(任一匹配), 2=元组匹配(源或目的整体匹配)
 
 // 过滤匹配函数
 // 返回 1 表示匹配，0 表示不匹配
 static __always_inline int match_filter(__u32 src_ip, __u32 dst_ip,
 					__u16 src_port, __u16 dst_port)
 {
+	if (filter_mode == 2) {
+		// mode 2: 必须 (src_ip, src_port) 或 (dst_ip, dst_port) 整体满足
+		bool src_ok = (filter_ip == 0 || filter_ip == src_ip) &&
+			      (filter_port == 0 || filter_port == src_port);
+		bool dst_ok = (filter_ip == 0 || filter_ip == dst_ip) &&
+			      (filter_port == 0 || filter_port == dst_port);
+		return src_ok || dst_ok;
+	}
+
 	// IP 匹配: 检查源或目标 IP
 	bool ip_match = (filter_ip == 0 || filter_ip == src_ip || filter_ip == dst_ip);
 	// Port 匹配: 检查源或目标端口

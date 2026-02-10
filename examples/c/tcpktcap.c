@@ -34,7 +34,7 @@ struct tcpktcap_config {
 	__u32 ratelimit_burst;
 	__u32 filter_ip;      // 0 = 不过滤 IP
 	__u16 filter_port;    // 0 = 不过滤端口
-	__u8 filter_mode;     // 0=AND(全部匹配), 1=OR(任一匹配)
+	__u8 filter_mode;     // 0=AND(全部匹配), 1=OR(任一匹配), 2=元组(源或目的整体匹配)
 };
 
 // 全局配置
@@ -122,7 +122,7 @@ int main(int argc, char **argv)
 	// STEP 3: 配置过滤参数（必须在 load 之前设置）
 	skel->rodata->filter_ip = g_config.filter_ip;         // 0 = 不过滤 IP
 	skel->rodata->filter_port = g_config.filter_port;     // 0 = 不过滤端口
-	skel->rodata->filter_mode = g_config.filter_mode;     // 0=AND, 1=OR
+	skel->rodata->filter_mode = g_config.filter_mode;     // 0=AND, 1=OR, 2=元组
 
 	// STEP 4: 配置 RateLimit（必须在 load 之前设置）
 	skel->rodata->__bpf_ratelimit_interval = g_config.ratelimit_interval;
@@ -393,7 +393,7 @@ static int parse_tcpktcap_config_args(int argc, char *argv[], struct tcpktcap_co
 	fprintf(stderr, "  ratelimit_burst: %u\n", config->ratelimit_burst);
 	fprintf(stderr, "  filter_ip: 0x%x\n", config->filter_ip);
 	fprintf(stderr, "  filter_port: %u\n", config->filter_port);
-	fprintf(stderr, "  filter_mode: %u (0=AND, 1=OR)\n", config->filter_mode);
+	fprintf(stderr, "  filter_mode: %u (0=AND, 1=OR, 2=tuple)\n", config->filter_mode);
 
 	return 0;
 }
