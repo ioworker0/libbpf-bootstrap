@@ -289,6 +289,9 @@ int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_d
     return socket_send_raw_message(sp, MSG_TYPE_STACKTRACE, json_buf, strlen(json_buf));
 }
 
+/* 5元组长度：src_ip 到 data 之前的字节数 */
+#define PACKET_5TUPLE_SIZE  (offsetof(struct packet_data, data) - offsetof(struct packet_data, src_ip))
+
 /* Send packet data message */
 int socket_send_packet(struct socket_protocol *sp, const struct packet_data *packet)
 {
@@ -296,8 +299,9 @@ int socket_send_packet(struct socket_protocol *sp, const struct packet_data *pac
         return -1;
     }
 
-    // 只发送实际包数据，frame header 已有长度信息
-    return socket_send_raw_message(sp, MSG_TYPE_PACKET, (const char *)packet->data, packet->data_len);
+    return socket_send_raw_message(sp, MSG_TYPE_PACKET,
+                                   (const char *)&packet->src_ip,
+                                   PACKET_5TUPLE_SIZE + packet->data_len);
 }
 
 /* Send log info message */

@@ -13,6 +13,13 @@
 // 传递到用户态的数据包事件
 struct packet_event {
 	__u16 data_len;           // 实际捕获长度
+	// 5元组信息（固定位置）
+	__u32 src_ip;             // 源IP地址（网络字节序）
+	__u32 dst_ip;             // 目标IP地址（网络字节序）
+	__u16 src_port;           // 源端口（主机字节序）
+	__u16 dst_port;           // 目标端口（主机字节序）
+	__u8  protocol;           // 协议（IPPROTO_TCP = 6）
+	__u8  reserved[3];        // 对齐保留字段
 	__u8  data[CAPTURE_LEN];  // 原始以太网帧数据
 };
 
@@ -99,8 +106,15 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	if (!evt)
 		return TC_ACT_UNSPEC;
 
-	// 填充数据并提交
+	// 填充5元组信息
 	evt->data_len = capture_len;
+	evt->src_ip = ip->saddr;                      // 网络字节序
+	evt->dst_ip = ip->daddr;                      // 网络字节序
+	evt->src_port = bpf_ntohs(tcp->source);       // 转换为主机字节序
+	evt->dst_port = bpf_ntohs(tcp->dest);         // 转换为主机字节序
+	evt->protocol = ip->protocol;                 // IPPROTO_TCP = 6
+	
+	// 填充原始数据包数据
 	for (int i = 0; i < CAPTURE_LEN && i < capture_len; i++) {
 		if ((void *)(((__u8 *)data) + i) >= data_end)
 			break;

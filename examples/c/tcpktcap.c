@@ -50,6 +50,13 @@ static struct tcpktcap_config g_config = {
 
 struct packet_event {
 	__u16 data_len;
+	// 5元组信息（固定位置）
+	__u32 src_ip;             // 源IP地址（网络字节序）
+	__u32 dst_ip;             // 目标IP地址（网络字节序）
+	__u16 src_port;           // 源端口（主机字节序）
+	__u16 dst_port;           // 目标端口（主机字节序）
+	__u8  protocol;           // 协议（IPPROTO_TCP = 6）
+	__u8  reserved[3];        // 对齐保留字段
 	__u8  data[CAPTURE_LEN];
 };
 
@@ -248,8 +255,13 @@ static void print_hex_dump(const __u8 *data, __u16 len)
 static int handle_packet_print(void *ctx, void *data, size_t len)
 {
 	struct packet_event *pkt = data;
+	struct in_addr src_addr = { .s_addr = pkt->src_ip };
+	struct in_addr dst_addr = { .s_addr = pkt->dst_ip };
 
-	printf("\nlen=%u\n", pkt->data_len);
+	printf("\n5-tuple: %s:%u -> %s:%u [proto=%u] len=%u\n",
+	       inet_ntoa(src_addr), pkt->src_port,
+	       inet_ntoa(dst_addr), pkt->dst_port,
+	       pkt->protocol, pkt->data_len);
 	print_hex_dump(pkt->data, pkt->data_len > MAX_PRINT_LEN ? MAX_PRINT_LEN : pkt->data_len);
 
 	return 0;
@@ -259,7 +271,8 @@ static int handle_packet_socket(void *ctx, void *data, size_t len)
 {
 	struct packet_event *pkt = data;
 
-	// 直接发送，packet_event 和 packet_data 结构相同
+	// 发送带5元组信息的 packet_event 到 socket
+	// 注意：packet_event 和 packet_data 结构不再相同，需要适配
 	if (socket_send_packet(&g_socket, (struct packet_data *)pkt) < 0) {
 		fprintf(stderr, "Failed to send packet to socket\n");
 		return -1;
