@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stddef.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/uio.h>
@@ -302,6 +303,63 @@ int socket_send_packet(struct socket_protocol *sp, const struct packet_data *pac
     return socket_send_raw_message(sp, MSG_TYPE_PACKET,
                                    (const char *)&packet->src_ip,
                                    PACKET_5TUPLE_SIZE + packet->data_len);
+}
+
+/* Send packet data message - zero-copy version (writev with 3 iovecs) */
+int socket_send_packet_zerocopy(struct socket_protocol *sp,
+                                 uint32_t src_ip, uint32_t dst_ip,
+                                 uint16_t src_port, uint16_t dst_port,
+                                 uint8_t protocol, const uint8_t *data, uint32_t data_len)
+{
+    struct frame_header header;
+    ssize_t sent;
+    int ret = 0;
+
+    if (!sp || sp->socket_fd < 0 || !data) {
+        return -1;
+    }
+
+    /* 构造 5元组结构（在栈上，无需完整 packet_data） */
+    struct {
+        uint32_t src_ip;
+        uint32_t dst_ip;
+        uint16_t src_port;
+        uint16_t dst_port;
+        uint8_t  protocol;
+        uint8_t  reserved[3];
+    } tuple = {
+        .src_ip = src_ip,
+        .dst_ip = dst_ip,
+        .src_port = src_port,
+        .dst_port = dst_port,
+        .protocol = protocol,
+        .reserved = {0}
+    };
+
+    /* Lock to ensure atomic send */
+    pthread_mutex_lock(&sp->send_mutex);
+
+    /* Pack header: 5元组(16字节) + data */
+    pack_frame_header(&header, MSG_TYPE_PACKET, sizeof(tuple) + data_len);
+
+    /* 使用 writev 一次性发送 header + tuple + data，真正零拷贝 */
+    struct iovec iov[3];
+    iov[0].iov_base = &header;
+    iov[0].iov_len = sizeof(header);
+    iov[1].iov_base = &tuple;
+    iov[1].iov_len = sizeof(tuple);
+    iov[2].iov_base = (void *)data;  // 直接发送原始 packet 指针，无 memcpy
+    iov[2].iov_len = data_len;
+
+    sent = writev(sp->socket_fd, iov, 3);
+    if (sent != (ssize_t)(sizeof(header) + sizeof(tuple) + data_len)) {
+        fprintf(stderr, "[ERROR] writev failed: sent=%zd, expected=%zu, error=%s\n",
+                sent, sizeof(header) + sizeof(tuple) + data_len, strerror(errno));
+        ret = -1;
+    }
+
+    pthread_mutex_unlock(&sp->send_mutex);
+    return ret;
 }
 
 /* Send log info message */

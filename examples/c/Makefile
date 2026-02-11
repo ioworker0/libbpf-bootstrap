@@ -28,6 +28,10 @@ APPS = minimal minimal_legacy minimal_ns bootstrap uprobe kprobe fentry \
        usdt sockfilter tc ksyscall task_iter lsm lsm_mount skb_kfree_skb skb_kfree_skb_no_reason my_runqslower offcputime captrace loopback-sockops loopback-redir \
        my_thp_policy netrecvlat tcpiter tcpdestroy iotrace egress_filter ingress_filter pktcap tcpktcap dscp_mark tcpdrop_tracer
 
+# libpcap-based applications (no eBPF required)
+PCAP_APPS = tcpktcap_pcap
+APPS += $(PCAP_APPS)
+
 CARGO ?= $(shell which cargo)
 ifeq ($(strip $(CARGO)),)
 BZS_APPS :=
@@ -133,9 +137,14 @@ $(patsubst %,$(OUTPUT)/%.o,$(BZS_APPS)): $(LIBBLAZESYM_OBJ)
 $(BZS_APPS): $(LIBBLAZESYM_OBJ)
 
 # Build application binary with common additional source files
-$(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
+$(filter-out $(PCAP_APPS),$(APPS)): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
 	$(call msg,BINARY,$@)
 	$(Q)$(CC) $(CFLAGS) $(OUTPUT)/$*.o $(COMMON_SRCS) $(LIBBPF_OBJ) $(ALL_LDFLAGS) -lelf -lz -lpthread -o $@
+
+# Build libpcap-based applications (no libbpf dependency, no skeleton needed)
+$(PCAP_APPS): %: %.c $(COMMON_SRCS) | $(OUTPUT)
+	$(call msg,BINARY,$@)
+	$(Q)$(CC) $(CFLAGS) $< $(COMMON_SRCS) $(ALL_LDFLAGS) -lpcap -lpthread -o $@
 
 # delete failed targets
 .DELETE_ON_ERROR:
