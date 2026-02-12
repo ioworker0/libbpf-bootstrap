@@ -7,8 +7,8 @@
 
 #define ETH_P_IP 0x0800
 #define TC_ACT_UNSPEC (-1)
-#define CAPTURE_LEN 1600
 #define IPPROTO_TCP 6
+#define CAPTURE_LEN 1600
 
 // 传递到用户态的数据包事件
 struct packet_event {
@@ -69,11 +69,22 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct packet_event *evt;
-	__u16 capture_len;
 
 	// 安全检查 1: Watchdog - 用户态挂了自动放行
 	if (bpf_watchdog_timed_out())
 		return TC_ACT_UNSPEC;
+
+	/* 先把需要的字节拉到线性区，避免非线性 skb 导致截断 */
+	__u32 pull_len = skb->len;
+	if (pull_len > CAPTURE_LEN)
+		pull_len = CAPTURE_LEN;
+	if (pull_len > 0 && bpf_skb_pull_data(skb, pull_len) < 0)
+		return TC_ACT_UNSPEC;
+
+	// 重新获取指针
+	data = (void *)(__u64)skb->data;
+	data_end = (void *)(__u64)skb->data_end;
+	eth = data;
 
 	// 安全检查 2: 以太网头边界检查
 	if ((void *)(eth + 1) > data_end)
@@ -101,34 +112,41 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	if (!match_filter(ip->saddr, ip->daddr, bpf_ntohs(tcp->source), bpf_ntohs(tcp->dest)))
 		return TC_ACT_UNSPEC;
 
-	// 计算捕获长度（整个以太网帧）
-	capture_len = data_end - data;
-	if (capture_len > CAPTURE_LEN)
-		capture_len = CAPTURE_LEN;
-
 	// RateLimit: 限制抓包速率，防止 ringbuf 溢出和用户态过载
 	if (bpf_ratelimit_check())
 		return TC_ACT_UNSPEC;
+
+	/* 线性区可读长度 */
+	__u32 payload_len = (__u32)((__u8 *)data_end - (__u8 *)data);
+	if (payload_len > CAPTURE_LEN)
+		payload_len = CAPTURE_LEN;
 
 	// 分配 ringbuf 空间
 	evt = bpf_ringbuf_reserve(&packets, sizeof(*evt), 0);
 	if (!evt)
 		return TC_ACT_UNSPEC;
 
-	// 填充5元组信息
-	evt->data_len = capture_len;
-	evt->src_ip = ip->saddr;                      // 网络字节序
-	evt->dst_ip = ip->daddr;                      // 网络字节序
-	evt->src_port = bpf_ntohs(tcp->source);       // 转换为主机字节序
-	evt->dst_port = bpf_ntohs(tcp->dest);         // 转换为主机字节序
-	evt->protocol = ip->protocol;                 // IPPROTO_TCP = 6
-	
-	// 填充原始数据包数据
-	for (int i = 0; i < CAPTURE_LEN && i < capture_len; i++) {
-		if ((void *)(((__u8 *)data) + i) >= data_end)
-			break;
-		evt->data[i] = *(((__u8 *)data) + i);
+	// 填充元数据（包括长度）
+	evt->data_len = payload_len;
+	evt->src_ip = ip->saddr;
+	evt->dst_ip = ip->daddr;
+	evt->src_port = bpf_ntohs(tcp->source);
+	evt->dst_port = bpf_ntohs(tcp->dest);
+	evt->protocol = ip->protocol;
+
+	/* 不能对 ringbuf 内存直接用 bpf_skb_load_bytes，这里用逐字节拷贝 */
+	if (payload_len > 0) {
+		for (int i = 0; i < CAPTURE_LEN; i++) {
+			if (i >= payload_len)
+				break;
+			/* 每次迭代都对包边界做显式检查，帮助 verifier 证明安全 */
+			void *p = (__u8 *)data + i;
+			if (p + 1 > data_end)
+				break;
+			evt->data[i] = *(__u8 *)p;
+		}
 	}
+
 	bpf_ringbuf_submit(evt, 0);
 
 	return TC_ACT_UNSPEC;  // 放行流量

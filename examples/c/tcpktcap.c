@@ -271,9 +271,12 @@ static int handle_packet_socket(void *ctx, void *data, size_t len)
 {
 	struct packet_event *pkt = data;
 
-	// 发送带5元组信息的 packet_event 到 socket
-	// 注意：packet_event 和 packet_data 结构不再相同，需要适配
-	if (socket_send_packet(&g_socket, (struct packet_data *)pkt) < 0) {
+	// 使用 zero-copy 版本直接发送，避免结构体内存布局问题
+	if (socket_send_packet_zerocopy(&g_socket,
+					pkt->src_ip, pkt->dst_ip,
+					pkt->src_port, pkt->dst_port,
+					pkt->protocol,
+					pkt->data, pkt->data_len) < 0) {
 		fprintf(stderr, "Failed to send packet to socket\n");
 		return -1;
 	}
