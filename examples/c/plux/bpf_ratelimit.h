@@ -37,7 +37,14 @@ static __always_inline bool bpf_ratelimit_check(void)
 	}
 
 	if (__bpf_ratelimit.events < __bpf_ratelimit_burst) {
-		__sync_fetch_and_add(&__bpf_ratelimit.events, 1);
+		/*
+		 * 兼容性说明：
+		 * 在部分 5.10 内核上，__sync_fetch_and_add 会生成 BPF_ATOMIC/STX，
+		 * 加载时可能报 "BPF_STX uses reserved fields"。
+		 * 这里改为普通自增，允许多 CPU 下存在轻微计数误差。
+		 */
+		/* __sync_fetch_and_add(&__bpf_ratelimit.events, 1); */
+		__bpf_ratelimit.events++;
 		return false;  // 允许
 	}
 
