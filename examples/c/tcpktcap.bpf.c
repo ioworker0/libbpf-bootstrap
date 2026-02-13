@@ -150,17 +150,35 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	evt->reserved[2] = 0;
 
 	/* 
-	 * 尝试使用 helper 一次性拷贝 
-	 * 注意：payload_len 是变量，在某些旧内核 verifier 可能无法推导安全性。
-	 * 但因为 reserve 是常量大小，且我们对 payload_len 做了 CAPTURE_LEN 截断，
-	 * 这里期望 verifier 能通过。
+	 * 高性能手动拷贝（Manual Optimized Copy）：
+	 * 由于当前内核 verifier 不支持 bpf_skb_load_bytes 写入 ringbuf，
+	 * 这里使用“8字节宽拷贝 + 展开循环”来最大化性能。
+	 * - 8字节宽拷贝：比单字节快 8 倍，减少内存访问次数。
+	 * - unroll：消除循环跳转开销。
 	 */
+	int i = 0;
 	if (payload_len > 0) {
-		// 再次确保 payload_len 不超限（verifier 提示）
-		if (payload_len > CAPTURE_LEN)
-			payload_len = CAPTURE_LEN;
-			
-		bpf_skb_load_bytes(skb, 0, evt->data, payload_len);
+		/* 主循环：每次搬运 8 字节 */
+#pragma unroll
+		for (; i + 8 <= CAPTURE_LEN; i += 8) {
+			if (i + 8 > payload_len)
+				break;
+			void *p = (__u8 *)data + i;
+			if (p + 8 > data_end)
+				break;
+			// 强转为 u64 进行宽拷贝
+			*(__u64 *)(evt->data + i) = *(__u64 *)p;
+		}
+		/* 尾部处理：搬运剩余不足 8 字节的部分 */
+#pragma unroll
+		for (; i < CAPTURE_LEN; i++) {
+			if (i >= payload_len)
+				break;
+			void *p = (__u8 *)data + i;
+			if (p + 1 > data_end)
+				break;
+			evt->data[i] = *(__u8 *)p;
+		}
 	}
 
 	bpf_ringbuf_submit(evt, 0);
