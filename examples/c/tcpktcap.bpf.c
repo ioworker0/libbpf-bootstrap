@@ -10,8 +10,8 @@
 #define IPPROTO_TCP 6
 #define CAPTURE_LEN 1600
 
-// 传递到用户态的数据包事件
-struct packet_event {
+// 传递到用户态的数据包事件头（固定布局，不含可变长 data）
+struct packet_event_meta {
 	__u32 data_len;           // 实际捕获长度
 	// 5元组信息（固定位置）
 	__u32 src_ip;             // 源IP地址（网络字节序）
@@ -20,13 +20,12 @@ struct packet_event {
 	__u16 dst_port;           // 目标端口（主机字节序）
 	__u8  protocol;           // 协议（IPPROTO_TCP = 6）
 	__u8  reserved[3];        // 对齐保留字段
-	__u8  data[CAPTURE_LEN];  // 原始以太网帧数据
 };
 
 // Ringbuf: 内核态 -> 用户态 传递数据包
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 48 * 1024 * 1024);  // 48MB ≈ 30711 个包
+	__uint(max_entries, 96 * 1024 * 1024);  // 96MB ≈ 60000 个包
 } packets SEC(".maps");
 
 // 过滤配置（const，加载前通过 rodata 设置）
@@ -68,23 +67,17 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	struct ethhdr *eth = data;
 	struct iphdr *ip;
 	struct tcphdr *tcp;
-	struct packet_event *evt;
+	struct packet_event_meta *evt;
+	__u8 *payload_ptr;
+	__u32 src_ip, dst_ip;
+	__u16 src_port, dst_port;
+	__u8 protocol;
 
 	// 安全检查 1: Watchdog - 用户态挂了自动放行
 	if (bpf_watchdog_timed_out())
 		return TC_ACT_UNSPEC;
 
-	/* 先把需要的字节拉到线性区，避免非线性 skb 导致截断 */
-	__u32 pull_len = skb->len;
-	if (pull_len > CAPTURE_LEN)
-		pull_len = CAPTURE_LEN;
-	if (pull_len > 0 && bpf_skb_pull_data(skb, pull_len) < 0)
-		return TC_ACT_UNSPEC;
-
-	// 重新获取指针
-	data = (void *)(__u64)skb->data;
-	data_end = (void *)(__u64)skb->data_end;
-	eth = data;
+	/* 微调: 先解析/过滤，命中后再 pull_data，减少每包开销 */
 
 	// 安全检查 2: 以太网头边界检查
 	if ((void *)(eth + 1) > data_end)
@@ -108,42 +101,62 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	if ((void *)(tcp + 1) > data_end)
 		return TC_ACT_UNSPEC;
 
+	/* 保存元组，后续 pull_data 后指针会失效 */
+	src_ip = ip->saddr;
+	dst_ip = ip->daddr;
+	src_port = bpf_ntohs(tcp->source);
+	dst_port = bpf_ntohs(tcp->dest);
+	protocol = ip->protocol;
+
 	// 应用过滤规则
-	if (!match_filter(ip->saddr, ip->daddr, bpf_ntohs(tcp->source), bpf_ntohs(tcp->dest)))
+	if (!match_filter(src_ip, dst_ip, src_port, dst_port))
 		return TC_ACT_UNSPEC;
 
 	// RateLimit: 限制抓包速率，防止 ringbuf 溢出和用户态过载
 	if (bpf_ratelimit_check())
 		return TC_ACT_UNSPEC;
 
+	/* 命中过滤后再拉线性区，降低总体开销 */
+	// https://docs.ebpf.io/linux/helper-function/bpf_skb_pull_data/
+	__u32 pull_len = skb->len;
+	if (pull_len > CAPTURE_LEN)
+		pull_len = CAPTURE_LEN;
+	if (pull_len > 0 && bpf_skb_pull_data(skb, pull_len) < 0)
+		return TC_ACT_UNSPEC;
+
+	/* pull_data 后 data/data_end 可能变化，必须重取 */
+	data = (void *)(__u64)skb->data;
+	data_end = (void *)(__u64)skb->data_end;
+
 	/* 线性区可读长度 */
 	__u32 payload_len = (__u32)((__u8 *)data_end - (__u8 *)data);
 	if (payload_len > CAPTURE_LEN)
 		payload_len = CAPTURE_LEN;
 
-	// 分配 ringbuf 空间
-	evt = bpf_ringbuf_reserve(&packets, sizeof(*evt), 0);
+	/* 只为“固定头 + 实际 payload”申请空间，字段布局不变 */
+	__u32 event_len = sizeof(*evt) + payload_len;
+	evt = bpf_ringbuf_reserve(&packets, event_len, 0);
 	if (!evt)
 		return TC_ACT_UNSPEC;
 
 	// 填充元数据（包括长度）
 	evt->data_len = payload_len;
-	evt->src_ip = ip->saddr;
-	evt->dst_ip = ip->daddr;
-	evt->src_port = bpf_ntohs(tcp->source);
-	evt->dst_port = bpf_ntohs(tcp->dest);
-	evt->protocol = ip->protocol;
+	evt->src_ip = src_ip;
+	evt->dst_ip = dst_ip;
+	evt->src_port = src_port;
+	evt->dst_port = dst_port;
+	evt->protocol = protocol;
+//	evt->reserved[0] = 0;
+//	evt->reserved[1] = 0;
+//	evt->reserved[2] = 0;
 
-	/* 不能对 ringbuf 内存直接用 bpf_skb_load_bytes，这里用逐字节拷贝 */
+	payload_ptr = (__u8 *)(evt + 1);
+
+	/* 一次 helper 拷贝到 ringbuf 可变长 payload 区 */
 	if (payload_len > 0) {
-		for (int i = 0; i < CAPTURE_LEN; i++) {
-			if (i >= payload_len)
-				break;
-			/* 每次迭代都对包边界做显式检查，帮助 verifier 证明安全 */
-			void *p = (__u8 *)data + i;
-			if (p + 1 > data_end)
-				break;
-			evt->data[i] = *(__u8 *)p;
+		if (bpf_skb_load_bytes(skb, 0, payload_ptr, payload_len) < 0) {
+			bpf_ringbuf_discard(evt, 0);
+			return TC_ACT_UNSPEC;
 		}
 	}
 
