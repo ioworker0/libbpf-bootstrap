@@ -145,18 +145,22 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	evt->src_port = src_port;
 	evt->dst_port = dst_port;
 	evt->protocol = protocol;
-//	evt->reserved[0] = 0;
-//	evt->reserved[1] = 0;
-//	evt->reserved[2] = 0;
+	evt->reserved[0] = 0;
+	evt->reserved[1] = 0;
+	evt->reserved[2] = 0;
 
-	/* 简化为单循环拷贝 */
-	for (int i = 0; i < CAPTURE_LEN; i++) {
-		if (i >= payload_len)
-			break;
-		void *p = (__u8 *)data + i;
-		if (p + 1 > data_end)
-			break;
-		evt->data[i] = *(__u8 *)p;
+	/* 
+	 * 尝试使用 helper 一次性拷贝 
+	 * 注意：payload_len 是变量，在某些旧内核 verifier 可能无法推导安全性。
+	 * 但因为 reserve 是常量大小，且我们对 payload_len 做了 CAPTURE_LEN 截断，
+	 * 这里期望 verifier 能通过。
+	 */
+	if (payload_len > 0) {
+		// 再次确保 payload_len 不超限（verifier 提示）
+		if (payload_len > CAPTURE_LEN)
+			payload_len = CAPTURE_LEN;
+			
+		bpf_skb_load_bytes(skb, 0, evt->data, payload_len);
 	}
 
 	bpf_ringbuf_submit(evt, 0);
