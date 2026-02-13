@@ -10,8 +10,8 @@
 #define IPPROTO_TCP 6
 #define CAPTURE_LEN 1600
 
-// 传递到用户态的数据包事件头（固定布局，不含可变长 data）
-struct packet_event_meta {
+// 传递到用户态的数据包事件
+struct packet_event {
 	__u32 data_len;           // 实际捕获长度
 	// 5元组信息（固定位置）
 	__u32 src_ip;             // 源IP地址（网络字节序）
@@ -20,6 +20,7 @@ struct packet_event_meta {
 	__u16 dst_port;           // 目标端口（主机字节序）
 	__u8  protocol;           // 协议（IPPROTO_TCP = 6）
 	__u8  reserved[3];        // 对齐保留字段
+	__u8  data[CAPTURE_LEN];  // 原始以太网帧数据
 };
 
 // Ringbuf: 内核态 -> 用户态 传递数据包
@@ -67,8 +68,7 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	struct ethhdr *eth = data;
 	struct iphdr *ip;
 	struct tcphdr *tcp;
-	struct packet_event_meta *evt;
-	__u8 *payload_ptr;
+	struct packet_event *evt;
 	__u32 src_ip, dst_ip;
 	__u16 src_port, dst_port;
 	__u8 protocol;
@@ -133,9 +133,8 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	if (payload_len > CAPTURE_LEN)
 		payload_len = CAPTURE_LEN;
 
-	/* 只为“固定头 + 实际 payload”申请空间，字段布局不变 */
-	__u32 event_len = sizeof(*evt) + payload_len;
-	evt = bpf_ringbuf_reserve(&packets, event_len, 0);
+	/* 兼容当前内核 verifier：ringbuf_reserve 的 size 需为编译期常量 */
+	evt = bpf_ringbuf_reserve(&packets, sizeof(*evt), 0);
 	if (!evt)
 		return TC_ACT_UNSPEC;
 
@@ -150,14 +149,11 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 //	evt->reserved[1] = 0;
 //	evt->reserved[2] = 0;
 
-	payload_ptr = (__u8 *)(evt + 1);
-
-	/* 一次 helper 拷贝到 ringbuf 可变长 payload 区 */
-	if (payload_len > 0) {
-		if (bpf_skb_load_bytes(skb, 0, payload_ptr, payload_len) < 0) {
-			bpf_ringbuf_discard(evt, 0);
-			return TC_ACT_UNSPEC;
-		}
+	/* 简化为单循环拷贝 */
+	for (int i = 0; i < CAPTURE_LEN; i++) {
+		if (i >= payload_len)
+			break;
+		evt->data[i] = *((__u8 *)data + i);
 	}
 
 	bpf_ringbuf_submit(evt, 0);
