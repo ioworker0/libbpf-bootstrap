@@ -341,17 +341,17 @@ static int parse_tcpktcap_config_args(int argc, char *argv[], struct tcpktcap_co
 	// 解析 ingress
 	item = cJSON_GetObjectItem(json, "ingress");
 	if (item && cJSON_IsTrue(item)) {
-		config->ingress = true;
+		config->egress = true;
 	} else if (item && cJSON_IsFalse(item)) {
-		config->ingress = false;
+		config->egress = false;
 	}
 
 	// 解析 egress
 	item = cJSON_GetObjectItem(json, "egress");
 	if (item && cJSON_IsTrue(item)) {
-		config->egress = true;
+		config->ingress = true;
 	} else if (item && cJSON_IsFalse(item)) {
-		config->egress = false;
+		config->ingress = false;
 	}
 
 	// 解析 ratelimit_interval

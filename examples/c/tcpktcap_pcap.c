@@ -41,6 +41,8 @@ typedef uint32_t __u32;
 struct tcpktcap_pcap_config {
 	char socket_path[MAX_SOCKET_PATH];
 	char interface[MAX_INTERFACE_LEN];
+	bool ingress;                      // 是否捕获入口流量
+	bool egress;                       // 是否捕获出口流量
 	__u32 ratelimit_interval;      // 速率限制窗口（秒）
 	__u32 ratelimit_burst;          // 每窗口允许的包数
 	__u32 filter_ip;                // 过滤IP（网络字节序，0=不过滤）
@@ -50,6 +52,8 @@ struct tcpktcap_pcap_config {
 
 // 全局配置
 static struct tcpktcap_pcap_config g_config = {
+	.ingress = true,
+	.egress = true,
 	.ratelimit_interval = 1,
 	.ratelimit_burst = 100,
 	.filter_ip = 0,
@@ -116,6 +120,22 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Couldn't open device %s: %s\n", g_config.interface, errbuf);
 		goto cleanup;
 	}
+
+	// 按配置区分 ingress / egress
+	if (!g_config.ingress && !g_config.egress) {
+		fprintf(stderr, "Error: Neither ingress nor egress is enabled\n");
+		goto cleanup;
+	}
+	if (g_config.ingress && g_config.egress) {
+		if (pcap_setdirection(handle, PCAP_D_INOUT) != 0)
+			fprintf(stderr, "Warning: pcap_setdirection(INOUT) failed: %s\n", pcap_geterr(handle));
+	} else if (g_config.ingress) {
+		if (pcap_setdirection(handle, PCAP_D_IN) != 0)
+			fprintf(stderr, "Warning: pcap_setdirection(IN) failed: %s\n", pcap_geterr(handle));
+	} else {
+		if (pcap_setdirection(handle, PCAP_D_OUT) != 0)
+			fprintf(stderr, "Warning: pcap_setdirection(OUT) failed: %s\n", pcap_geterr(handle));
+	}
 	
 	// 构建 BPF 过滤表达式
 	build_bpf_filter(filter_exp, sizeof(filter_exp));
@@ -178,6 +198,10 @@ cleanup:
 // 速率限制检查（用户态实现）
 static int ratelimit_check(void)
 {
+	// 如果 ratelimit_burst 或 ratelimit_interval 为 0，视为关闭限速
+	if (g_config.ratelimit_burst == 0 || g_config.ratelimit_interval == 0)
+		return 1;
+
 	time_t now = time(NULL);
 	
 	// 检查是否需要重置窗口
@@ -380,6 +404,16 @@ static int parse_tcpktcap_pcap_config(int argc, char *argv[])
 	if (item && cJSON_IsNumber(item)) {
 		g_config.ratelimit_interval = (__u32)item->valuedouble;
 	}
+
+	// 解析 ingress
+	item = cJSON_GetObjectItem(json, "ingress");
+	if (item && cJSON_IsBool(item))
+		g_config.ingress = cJSON_IsTrue(item);
+
+	// 解析 egress
+	item = cJSON_GetObjectItem(json, "egress");
+	if (item && cJSON_IsBool(item))
+		g_config.egress = cJSON_IsTrue(item);
 	
 	// 解析 ratelimit_burst
 	item = cJSON_GetObjectItem(json, "ratelimit_burst");
@@ -417,6 +451,8 @@ static int parse_tcpktcap_pcap_config(int argc, char *argv[])
 	fprintf(stderr, "Config parsed:\n");
 	fprintf(stderr, "  interface: %s\n", g_config.interface);
 	fprintf(stderr, "  socket_path: %s\n", g_config.socket_path);
+	fprintf(stderr, "  ingress: %s\n", g_config.ingress ? "true" : "false");
+	fprintf(stderr, "  egress: %s\n", g_config.egress ? "true" : "false");
 	fprintf(stderr, "  ratelimit: %u pkts/%u sec\n", 
 	        g_config.ratelimit_burst, g_config.ratelimit_interval);
 	if (g_config.filter_ip != 0) {
