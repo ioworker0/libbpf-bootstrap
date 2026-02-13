@@ -408,12 +408,12 @@ static int parse_tcpktcap_pcap_config(int argc, char *argv[])
 	// 解析 ingress
 	item = cJSON_GetObjectItem(json, "ingress");
 	if (item && cJSON_IsBool(item))
-		g_config.ingress = cJSON_IsTrue(item);
+		g_config.egress = cJSON_IsTrue(item);
 
 	// 解析 egress
 	item = cJSON_GetObjectItem(json, "egress");
 	if (item && cJSON_IsBool(item))
-		g_config.egress = cJSON_IsTrue(item);
+		g_config.ingress = cJSON_IsTrue(item);
 	
 	// 解析 ratelimit_burst
 	item = cJSON_GetObjectItem(json, "ratelimit_burst");
