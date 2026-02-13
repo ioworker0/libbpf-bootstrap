@@ -20,7 +20,11 @@ struct packet_event {
 	__u16 dst_port;           // 目标端口（主机字节序）
 	__u8  protocol;           // 协议（IPPROTO_TCP = 6）
 	__u8  reserved[3];        // 对齐保留字段
-	__u8  data[CAPTURE_LEN];  // 原始以太网帧数据
+	/* 
+	 * 加 8 字节 Padding，防止 verifier 在手动展开循环时报 off-by-one 越界。
+	 * 实际有效数据仍由 data_len 控制，不超过 CAPTURE_LEN。
+	 */
+	__u8  data[CAPTURE_LEN + 8]; 
 };
 
 // Ringbuf: 内核态 -> 用户态 传递数据包
@@ -150,33 +154,39 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	evt->reserved[2] = 0;
 
 	/* 
-	 * 高性能手动拷贝（Manual Optimized Copy）：
-	 * 由于当前内核 verifier 不支持 bpf_skb_load_bytes 写入 ringbuf，
-	 * 这里使用“8字节宽拷贝 + 展开循环”来最大化性能。
-	 * - 8字节宽拷贝：比单字节快 8 倍，减少内存访问次数。
-	 * - unroll：消除循环跳转开销。
+	 * 高性能手动拷贝（8字节宽拷贝 + 展开循环）：
+	 * 即使有 Padding，也要严格检查边界。
 	 */
 	int i = 0;
 	if (payload_len > 0) {
 		/* 主循环：每次搬运 8 字节 */
 #pragma unroll
 		for (; i + 8 <= CAPTURE_LEN; i += 8) {
+			/* 
+			 * verifier 能够追踪 i 的常数增量。
+			 * 这里的判断对性能无损，对 verifier 很有帮助。
+			 */
 			if (i + 8 > payload_len)
 				break;
+			
 			void *p = (__u8 *)data + i;
 			if (p + 8 > data_end)
 				break;
+			
 			// 强转为 u64 进行宽拷贝
 			*(__u64 *)(evt->data + i) = *(__u64 *)p;
 		}
+		
 		/* 尾部处理：搬运剩余不足 8 字节的部分 */
 #pragma unroll
 		for (; i < CAPTURE_LEN; i++) {
 			if (i >= payload_len)
 				break;
+			
 			void *p = (__u8 *)data + i;
 			if (p + 1 > data_end)
 				break;
+			
 			evt->data[i] = *(__u8 *)p;
 		}
 	}
