@@ -153,7 +153,10 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	for (int i = 0; i < CAPTURE_LEN; i++) {
 		if (i >= payload_len)
 			break;
-		evt->data[i] = *((__u8 *)data + i);
+		void *p = (__u8 *)data + i;
+		if (p + 1 > data_end)
+			break;
+		evt->data[i] = *(__u8 *)p;
 	}
 
 	bpf_ringbuf_submit(evt, 0);
