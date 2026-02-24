@@ -139,6 +139,20 @@ int plux_packet_forward(struct __sk_buff *skb)
 	// 更新 IP 校验和
 	update_ip_checksum(skb, ip_cksum_off, old_ip, new_ip);
 
+	// 重新加载包指针（helper 调用后验证器会丢失指针状态）
+	data_end = (void *)(__u64)skb->data_end;
+	data = (void *)(__u64)skb->data;
+	eth = data;
+
+	// 重新验证以太网头
+	if ((void *)(eth + 1) > data_end)
+		return TC_ACT_UNSPEC;
+
+	// 重新获取并验证 IP 头
+	ip = (struct iphdr *)(eth + 1);
+	if ((void *)(ip + 1) > data_end)
+		return TC_ACT_UNSPEC;
+
 	// 更新目的 IP
 	ip->daddr = new_ip;
 
@@ -155,6 +169,15 @@ int plux_packet_forward(struct __sk_buff *skb)
 				l4_cksum_off = sizeof(struct ethhdr) + (ip->ihl * 4) + offsetof(struct udphdr, check);
 			}
 			update_l4_checksum(skb, l4_cksum_off, old_ip, new_ip, 0, 0);
+
+			// 重新加载包指针（helper 调用后验证器会丢失指针状态）
+			data_end = (void *)(__u64)skb->data_end;
+			data = (void *)(__u64)skb->data;
+			eth = data;
+
+			// 重新验证（虽然不再使用，但保持一致性）
+			if ((void *)(eth + 1) > data_end)
+				return TC_ACT_UNSPEC;
 		}
 	}
 
