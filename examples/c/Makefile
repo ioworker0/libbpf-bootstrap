@@ -26,7 +26,7 @@ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 APPS = minimal minimal_legacy minimal_ns bootstrap uprobe kprobe fentry \
        usdt sockfilter tc ksyscall task_iter lsm lsm_mount skb_kfree_skb skb_kfree_skb_no_reason my_runqslower offcputime captrace loopback-sockops loopback-redir \
-       my_thp_policy netrecvlat tcpiter tcpdestroy iotrace egress_filter ingress_filter pktcap tcpktcap dscp_mark tcpdrop_tracer
+       my_thp_policy netrecvlat tcpiter tcpdestroy iotrace egress_filter ingress_filter pktcap tcpktcap dscp_mark tcpdrop_tracer pktfwd
 
 # libpcap-based applications (no eBPF required)
 PCAP_APPS = tcpktcap_pcap
