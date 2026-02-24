@@ -2,7 +2,7 @@
 /*
  * pktfwd.c - 包转发插件用户态程序 (DNAT)
  *
- * 功能：在 egress 方向匹配目的 IP，并转发到目标 IP
+ * 功能：在 ingress 方向匹配目的 IP，并转发到目标 IP
  *
  * 用法：pktfwd <interface> <original_ip> <target_ip>
  *   - interface: 网卡名称（veth 宿主机侧）
@@ -12,8 +12,8 @@
  * 例如：pktfwd calixxx 10.96.0.1 10.244.1.5
  *
  * 注意：
- *   - egress 是容器的出口方向
- *   - 对于 veth，宿主机侧的 egress 就是容器发出的包
+ *   - ingress 是容器出口方向（从容器角度）
+ *   - 对于 veth，宿主机侧的 ingress 就是容器发出的包
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,8 +75,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Example:\n");
 		fprintf(stderr, "  %s calixxx 10.96.0.1 10.244.1.5\n", argv[0]);
 		fprintf(stderr, "\n");
-		fprintf(stderr, "Note: egress is the container's outbound direction.\n");
-		fprintf(stderr, "For veth, the host side egress is packets from the container.\n");
+		fprintf(stderr, "Note: ingress is the container's outbound direction.\n");
+		fprintf(stderr, "For veth, the host side ingress is packets from the container.\n");
 		return 1;
 	}
 
@@ -110,7 +110,7 @@ int main(int argc, char **argv)
 	printf("Interface:    %s (ifindex: %d)\n", argv[1], ifindex);
 	printf("Original IP:  %s (will be matched)\n", argv[2]);
 	printf("Target IP:    %s (will be forwarded to)\n", argv[3]);
-	printf("Direction:    Egress (container outbound)\n");
+	printf("Direction:    Ingress (container outbound)\n");
 	printf("=======================================================\n\n");
 
 	// ------------------------------------------------
@@ -158,21 +158,21 @@ int main(int argc, char **argv)
 	}
 
 	// ================================================================
-	// STEP 7: TC Egress
+	// STEP 7: TC Ingress
 	// ================================================================
-	// 对于 veth，宿主机侧的 egress 就是容器发出的包
-	err = plux_tc_hook_create(ifindex, BPF_TC_EGRESS);
+	// 对于 veth，宿主机侧的 ingress 就是容器发出的包
+	err = plux_tc_hook_create(ifindex, BPF_TC_INGRESS);
 	if (err && err != -EEXIST) {
-		fprintf(stderr, "Failed to create TC egress hook: %d\n", err);
+		fprintf(stderr, "Failed to create TC ingress hook: %d\n", err);
 		goto cleanup;
 	}
 
 	// 清理旧的 filter
-	fprintf(stderr, "Cleaning up old egress filter at priority %d...\n", PLUX_PKTFWD_PRIORITY);
-	plux_tc_cleanup(ifindex, BPF_TC_EGRESS, PLUX_PKTFWD_PRIORITY, PLUX_PKTFWD_HANDLE);
+	fprintf(stderr, "Cleaning up old ingress filter at priority %d...\n", PLUX_PKTFWD_PRIORITY);
+	plux_tc_cleanup(ifindex, BPF_TC_INGRESS, PLUX_PKTFWD_PRIORITY, PLUX_PKTFWD_HANDLE);
 
 	// 挂载 BPF 程序
-	err = plux_tc_attach_prog(ifindex, BPF_TC_EGRESS,
+	err = plux_tc_attach_prog(ifindex, BPF_TC_INGRESS,
 				  bpf_program__fd(skel->progs.plux_packet_forward),
 				  PLUX_PKTFWD_PRIORITY, PLUX_PKTFWD_HANDLE);
 	if (err) {
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
 	}
 
 	printf("\n");
-	printf("Packet forwarding started on %s (egress)\n", argv[1]);
+	printf("Packet forwarding started on %s (ingress)\n", argv[1]);
 	printf("DNAT: %s -> %s\n", argv[2], argv[3]);
 	printf("Press Ctrl+C to stop\n");
 	printf("=======================================================\n\n");
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 
 cleanup_detach:
 	// Detach TC filter
-	plux_tc_detach(ifindex, BPF_TC_EGRESS, PLUX_PKTFWD_PRIORITY, PLUX_PKTFWD_HANDLE);
+	plux_tc_detach(ifindex, BPF_TC_INGRESS, PLUX_PKTFWD_PRIORITY, PLUX_PKTFWD_HANDLE);
 
 cleanup:
 	// 显示最终统计

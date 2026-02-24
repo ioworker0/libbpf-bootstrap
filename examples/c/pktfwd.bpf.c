@@ -2,14 +2,16 @@
 /*
  * pktfwd.bpf.c - 包转发插件 (DNAT)
  *
- * 功能：在 egress 方向匹配目的 IP，并转发到目标 IP
+ * 功能：在 ingress 方向匹配目的 IP，并转发到目标 IP
  *
  * 用法：pktfwd <interface> <original_ip> <target_ip>
  *   - interface: 网卡名称
  *   - original_ip: 需要转发的原始目的 IP
  *   - target_ip: 转发到哪里的目标 IP
  *
- * 例如：pktfwd eth0 10.96.0.1 10.244.1.5
+ * 例如：pktfwd calixxx 10.96.0.1 10.244.1.5
+ *
+ * 注意：ingress 是容器出口方向，即容器发出的包进入宿主机侧 veth
  */
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
