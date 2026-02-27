@@ -51,6 +51,15 @@ int socket_send_event(struct socket_protocol *sp, const void *event_data, size_t
 /* Send stacktrace message */
 int socket_send_stacktrace(struct socket_protocol *sp, const struct stacktrace_data *stacktrace);
 
+/* Send packet data message */
+int socket_send_packet(struct socket_protocol *sp, const struct packet_data *packet);
+
+/* Send packet data message - zero-copy version */
+int socket_send_packet_zerocopy(struct socket_protocol *sp,
+                                 uint32_t src_ip, uint32_t dst_ip,
+                                 uint16_t src_port, uint16_t dst_port,
+                                 uint8_t protocol, const uint8_t *data, uint32_t data_len);
+
 /* Send log messages */
 int socket_send_log_info(struct socket_protocol *sp, const char *message);
 int socket_send_log_warn(struct socket_protocol *sp, const char *message);

@@ -1,0 +1,210 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include <time.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include "ingress_filter.skel.h"
+
+static volatile sig_atomic_t exiting = 0;
+
+static void sig_int(int signo)
+{
+	exiting = 1;
+}
+
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+	if (level == LIBBPF_DEBUG)
+		return 0;
+	return vfprintf(stderr, format, args);
+}
+
+int main(int argc, char **argv)
+{
+	struct ingress_filter_bpf *skel;
+	int err;
+	int ifindex;
+	char *ifname;
+	int watchdog_fd = -1;
+
+	if (argc != 2) {
+		fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
+		fprintf(stderr, "Example: %s calife61cb86319\n", argv[0]);
+		return 1;
+	}
+
+	ifname = argv[1];
+	ifindex = if_nametoindex(ifname);
+	if (ifindex == 0) {
+		fprintf(stderr, "Failed to get ifindex for %s: %s\n", ifname, strerror(errno));
+		return 1;
+	}
+
+	printf("Interface: %s (ifindex: %d)\n", ifname, ifindex);
+
+	libbpf_set_print(libbpf_print_fn);
+
+	// 尝试使用自定义 BTF 路径（参考 captrace）
+	const char *btf_path = "/plux/btf/kernel.btf";
+	
+	if (access(btf_path, R_OK) == 0) {
+		printf("Found custom BTF at %s, using it.\n", btf_path);
+		LIBBPF_OPTS(bpf_object_open_opts, opts, .btf_custom_path = btf_path);
+		skel = ingress_filter_bpf__open_opts(&opts);
+	} else {
+		printf("Custom BTF not found at %s. Letting libbpf find one automatically.\n", btf_path);
+		skel = ingress_filter_bpf__open();
+	}
+	
+	if (!skel) {
+		fprintf(stderr, "Failed to open BPF skeleton\n");
+		return 1;
+	}
+
+	// 加载 BPF 程序
+	err = ingress_filter_bpf__load(skel);
+	if (err) {
+		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
+		goto cleanup;
+	}
+
+	printf("BPF program loaded successfully\n");
+
+	// 获取 watchdog map fd
+	watchdog_fd = bpf_map__fd(skel->maps.plux_watchdog);
+	if (watchdog_fd < 0) {
+		fprintf(stderr, "Failed to get watchdog map fd\n");
+		goto cleanup;
+	}
+
+	// 设置 TC hook (ingress) - veth 宿主机侧入口，过滤进入容器的包
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
+			    .ifindex = ifindex,
+			    .attach_point = BPF_TC_INGRESS);
+
+	// 创建 qdisc (如果不存在)，忽略已存在错误
+	err = bpf_tc_hook_create(&tc_hook);
+	if (err && err != -EEXIST) {
+		fprintf(stderr, "Failed to create TC hook: %d\n", err);
+		goto cleanup;
+	}
+	if (err == -EEXIST) {
+		printf("TC qdisc already exists (created by Calico)\n");
+	}
+
+	// Attach 前清理：删除旧的 plux_ingress_firewall 程序（priority 10，ingress）
+	printf("Cleaning up old filter at priority 10...\n");
+	
+	// 我们 attach 时固定用了 handle 1，所以这里也直接清理 handle 1
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, old_opts,
+			    .handle = 1,
+			    .priority = 10,
+			    .prog_fd = 0,
+			    .prog_id = 0,
+			    .flags = 0);
+	
+	// 先 query 确认一下（可选，但这能拿到 prog_id 打印出来）
+	err = bpf_tc_query(&tc_hook, &old_opts);
+	if (err == 0) {
+		printf("  -> Found old filter (handle=%u, prog_id=%u)\n", 
+		       old_opts.handle, old_opts.prog_id);
+		
+		old_opts.prog_fd = 0;
+		old_opts.prog_id = 0;
+		old_opts.flags = 0;
+		
+		err = bpf_tc_detach(&tc_hook, &old_opts);
+		if (err == 0) {
+			printf("  -> Removed successfully\n");
+		} else {
+			printf("  -> Failed to remove: %d (continuing anyway)\n", err);
+		}
+	} else {
+		// 如果 query 不到 handle 1，说明可能没有，或者用了其他 handle
+		// 无论如何，尝试 detach 一下 handle 1 兜底
+		printf("  -> No old filter with handle 1 found (err=%d)\n", err);
+		err = bpf_tc_detach(&tc_hook, &old_opts);
+		if (err == 0) {
+			printf("  -> Detached handle 1 successfully (blind detach)\n");
+		} else if (err != -ENOENT) {
+			printf("  -> Failed to detach handle 1: %d\n", err);
+		}
+	}
+
+	// 设置 TC opts，优先级设为 10（确保在 Calico 之前执行）
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
+			    .handle = 1,
+			    .priority = 10,  // 优先级 10，小于 Calico 的 49151
+			    .prog_fd = bpf_program__fd(skel->progs.plux_ingress_firewall));
+
+	// Attach 程序到 TC ingress
+	err = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (err) {
+		fprintf(stderr, "Failed to attach TC program: %d\n", err);
+		goto cleanup;
+	}
+
+	printf("Successfully attached ingress filter to %s (priority: %d)\n", ifname, tc_opts.priority);
+	printf("Blocking all ingress from source IP: 111.63.65.103\n");
+	printf("Press Ctrl+C to detach and exit...\n");
+	printf("\nYou can verify with: tc filter show dev %s ingress\n", ifname);
+	printf("To see logs: sudo cat /sys/kernel/debug/tracing/trace_pipe\n\n");
+
+	// 注册信号处理
+	if (signal(SIGINT, sig_int) == SIG_ERR) {
+		err = errno;
+		fprintf(stderr, "Can't set signal handler: %s\n", strerror(errno));
+		goto cleanup_detach;
+	}
+	signal(SIGTERM, sig_int);
+	signal(SIGHUP, sig_int);
+
+	// 初始化心跳
+	__u32 key = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	__u64 now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+	if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+		fprintf(stderr, "Failed to initialize watchdog: %s\n", strerror(errno));
+		goto cleanup_detach;
+	}
+	printf("Watchdog initialized (timeout: 30s, update interval: 1s)\n");
+
+	// 主循环：每 1 秒更新一次心跳
+	while (!exiting) {
+		sleep(1);
+		
+		if (!exiting) {
+			// 更新心跳时间戳
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+			if (bpf_map_update_elem(watchdog_fd, &key, &now, BPF_ANY) < 0) {
+				fprintf(stderr, "Failed to update watchdog: %s\n", strerror(errno));
+				exiting = 1;
+				goto cleanup_detach;
+			}
+		}
+	}
+
+	printf("\nDetaching program...\n");
+
+cleanup_detach:
+	// Detach 程序
+	tc_opts.flags = 0;
+	tc_opts.prog_fd = 0;
+	tc_opts.prog_id = 0;
+	bpf_tc_detach(&tc_hook, &tc_opts);
+
+cleanup:
+	printf("Cleaning up...\n");
+	ingress_filter_bpf__destroy(skel);
+	printf("Done.\n");
+	return err ? 1 : 0;
+}
