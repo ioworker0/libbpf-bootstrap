@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 #include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,9 +58,20 @@ static bool drop_reason_inited = false;
 static struct plugin_config g_config;
 static struct socket_protocol g_socket;
 static bool g_enable_plux_agent = false;
+static bool g_show_stack = false;
 static int stack_fd = -1;
 
 static volatile bool exiting = false;
+
+/* Kernel symbol resolution */
+#define MAX_SYMBOLS 200000
+#define MAX_SYMBOL_NAME_LEN 128
+struct kernel_symbol {
+    uint64_t addr;
+    char name[MAX_SYMBOL_NAME_LEN];
+};
+static struct kernel_symbol symbols[MAX_SYMBOLS];
+static int symbol_count = 0;
 
 /* Signal handler */
 static void handle_signal(int sig)
@@ -139,6 +151,80 @@ static void format_tcp_flags(__u8 flags, char *buf, size_t size)
         buf[0] = '\0';
 }
 
+/* Load kernel symbols from /proc/kallsyms */
+static int load_kernel_symbols(void)
+{
+    FILE *f = fopen("/proc/kallsyms", "r");
+    if (!f) {
+        perror("Failed to open /proc/kallsyms");
+        return -1;
+    }
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        uint64_t addr;
+        char type;
+        char name[MAX_SYMBOL_NAME_LEN];
+        if (sscanf(line, "%lx %c %s", &addr, &type, name) == 3) {
+            if (symbol_count < MAX_SYMBOLS) {
+                symbols[symbol_count].addr = addr;
+                strncpy(symbols[symbol_count].name, name, MAX_SYMBOL_NAME_LEN - 1);
+                symbols[symbol_count].name[MAX_SYMBOL_NAME_LEN - 1] = '\0';
+                symbol_count++;
+            }
+        }
+    }
+    fclose(f);
+    fprintf(stderr, "[INFO] Loaded %d kernel symbols\n", symbol_count);
+    return 0;
+}
+
+/* Resolve kernel address to symbol name */
+static const char *resolve_kernel_symbol(uint64_t addr)
+{
+    static char symbol[MAX_SYMBOL_NAME_LEN + 32];
+    int left = 0, right = symbol_count - 1;
+    int match_index = -1;
+
+    while (left <= right) {
+        int mid = left + (right - left) / 2;
+        if (symbols[mid].addr <= addr) {
+            match_index = mid;
+            left = mid + 1;
+        } else {
+            right = mid - 1;
+        }
+    }
+
+    if (match_index != -1) {
+        uint64_t offset = addr - symbols[match_index].addr;
+        snprintf(symbol, sizeof(symbol), "%s+0x%lx", symbols[match_index].name, (unsigned long)offset);
+        return symbol;
+    }
+    return "UNKNOWN";
+}
+
+/* Print stack trace */
+static void print_stack_trace(int stack_map_fd, int32_t stack_id)
+{
+    uint64_t ips[MAX_STACK_DEPTH] = {0};
+
+    if (stack_id < 0) {
+        printf("  [No stack trace available]\n");
+        return;
+    }
+
+    if (bpf_map_lookup_elem(stack_map_fd, &stack_id, ips) < 0) {
+        printf("  [Failed to lookup stack trace (id: %d)]\n", stack_id);
+        return;
+    }
+
+    printf("  Stack trace (id: %d):\n", stack_id);
+    for (int i = 0; i < MAX_STACK_DEPTH && ips[i]; i++) {
+        const char *sym = resolve_kernel_symbol(ips[i]);
+        printf("    #%-2d 0x%016lx [%s]\n", i, ips[i], sym);
+    }
+}
+
 /* Event handler */
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
@@ -212,9 +298,9 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         }
     } else {
         /* Standalone 模式: 打印到控制台 */
-        /* 转换时间戳为可读格式 */
-        time_t ts_sec = e->timestamp / 1000000000ULL;
-        struct tm *tm_info = localtime(&ts_sec);
+        /* 使用当前系统时间 */
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
         char time_str[64];
         strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
 
@@ -226,6 +312,11 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
                 flags_str,
                 get_drop_reason_name(e->drop_reason),
                 e->drop_reason);
+
+        /* 打印堆栈 */
+        if (g_show_stack && stack_fd >= 0) {
+            print_stack_trace(stack_fd, e->stack_id);
+        }
     }
 
     return 0;
@@ -246,11 +337,13 @@ static void usage(const char *prog)
         "Usage: %s [OPTIONS]\n\n"
         "Options:\n"
         "  -c, --config CONFIG  JSON configuration for Plux Agent\n"
+        "  -s, --stack          Show stack trace in standalone mode\n"
         "  -h, --help           Show this help\n\n"
         "Example:\n"
         "  %s                                    # Standalone mode\n"
+        "  %s -s                                 # Standalone mode with stack trace\n"
         "  %s --config '{\"socket_path\":\"/tmp/agent.sock\",\"plugin_name\":\"tcpdrop\",\"stack\":true}'\n",
-        prog, prog, prog);
+        prog, prog, prog, prog);
 }
 
 /* Initialize Plux Agent */
@@ -332,6 +425,9 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 0;
         }
+        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--stack") == 0) {
+            g_show_stack = true;
+        }
     }
 
     /* 设置信号处理 */
@@ -346,6 +442,13 @@ int main(int argc, char **argv)
     if (init_plux_agent(argc, argv) < 0) {
         fprintf(stderr, "[ERROR] Failed to initialize Plux Agent\n");
         return 1;
+    }
+
+    /* Standalone 模式下启用堆栈打印时，加载内核符号 */
+    if (!g_enable_plux_agent && g_show_stack) {
+        if (load_kernel_symbols() < 0) {
+            fprintf(stderr, "[WARN] Failed to load kernel symbols, stack traces will be limited\n");
+        }
     }
 
     /* 解析 drop reasons */
