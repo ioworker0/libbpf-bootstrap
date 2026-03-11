@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/resource.h>
@@ -211,8 +212,14 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         }
     } else {
         /* Standalone 模式: 打印到控制台 */
-        fprintf(stdout, "[%llu] TCP DROP: %s:%u -> %s:%u state=%s flags=[%s] reason=%s(%u)\n",
-                e->timestamp,
+        /* 转换时间戳为可读格式 */
+        time_t ts_sec = e->timestamp / 1000000000ULL;
+        struct tm *tm_info = localtime(&ts_sec);
+        char time_str[64];
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+        fprintf(stdout, "[%s] TCP DROP: %s:%u -> %s:%u state=%s flags=[%s] reason=%s(%u)\n",
+                time_str,
                 saddr_str, e->sport,
                 daddr_str, e->dport,
                 get_tcp_state_name(e->tcp_state),
