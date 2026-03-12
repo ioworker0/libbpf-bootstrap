@@ -515,7 +515,7 @@ int main(int argc, char **argv)
         stack_fd = bpf_map__fd(skel->maps.stack_traces);
 
     fprintf(stderr, "[INFO] Creating perf buffer...\n");
-    pb = perf_buffer__new(bpf_map__fd(skel->maps.events), 128, 
+    pb = perf_buffer__new(bpf_map__fd(skel->maps.events), 512,
                           handle_event, handle_lost_events, NULL, NULL);
     if (!pb) {
         fprintf(stderr, "[ERROR] Failed to create perf buffer (errno: %d, %s)\n", 
@@ -523,7 +523,7 @@ int main(int argc, char **argv)
         err = 1;
         goto cleanup;
     }
-    fprintf(stderr, "[INFO] Perf buffer created successfully (page_cnt=64)\n");
+    fprintf(stderr, "[INFO] Perf buffer created successfully (page_cnt=512)\n");
 
     fprintf(stderr, "[INFO] Listening for ns_capable kprobe events... Press Ctrl+C to stop.\n");
     fprintf(stderr, "%-6s %-6s %-5s %-24s %-12s %-8s %-12s %-20s %-10s %-24s %-15s %-8s %-32s\n",
