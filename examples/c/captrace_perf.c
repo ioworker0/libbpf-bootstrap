@@ -515,7 +515,7 @@ int main(int argc, char **argv)
         stack_fd = bpf_map__fd(skel->maps.stack_traces);
 
     fprintf(stderr, "[INFO] Creating perf buffer...\n");
-    pb = perf_buffer__new(bpf_map__fd(skel->maps.events), 64, 
+    pb = perf_buffer__new(bpf_map__fd(skel->maps.events), 128, 
                           handle_event, handle_lost_events, NULL, NULL);
     if (!pb) {
         fprintf(stderr, "[ERROR] Failed to create perf buffer (errno: %d, %s)\n", 
