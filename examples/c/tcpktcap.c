@@ -73,7 +73,7 @@ static struct socket_protocol g_socket;
 int main(int argc, char **argv)
 {
 	struct tcpktcap_bpf *skel;
-	struct ring_buffer *rb;
+	struct ring_buffer *rb = NULL;
 	int ifindex, err;
 
 	// 解析配置参数

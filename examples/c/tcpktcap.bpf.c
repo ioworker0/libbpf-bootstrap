@@ -132,10 +132,14 @@ int plux_tcp_packet_capture(struct __sk_buff *skb)
 	data = (void *)(__u64)skb->data;
 	data_end = (void *)(__u64)skb->data_end;
 
-	/* 线性区可读长度 */
-	__u32 payload_len = (__u32)((__u8 *)data_end - (__u8 *)data);
-	if (payload_len > CAPTURE_LEN)
-		payload_len = CAPTURE_LEN;
+	/*
+	 * bpf_skb_pull_data() 成功后，前 pull_len 字节已保证在线性区。
+	 * 这里直接复用 pull_len，避免对 packet pointer 做 verifier
+	 * 不接受的 32-bit 指针算术。
+	 */
+	__u32 payload_len = pull_len;
+    if (payload_len > CAPTURE_LEN)
+        payload_len = CAPTURE_LEN;
 
 	/* 兼容当前内核 verifier：ringbuf_reserve 的 size 需为编译期常量 */
 	evt = bpf_ringbuf_reserve(&packets, sizeof(*evt), 0);
