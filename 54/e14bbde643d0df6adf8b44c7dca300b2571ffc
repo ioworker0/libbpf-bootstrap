@@ -1,0 +1,25 @@
+examples/c/Makefile
+  s_4509af1e0415e8::t_cfb25c60baa1f4 29
+examples/c/plux-ebpf-raw-demo.c
+  s_4509af1e0415e8::t_cfb25c60baa1f4 1-215
+examples/c/plux-ebpf-raw-demo.md
+  s_4509af1e0415e8::t_cfb25c60baa1f4 1-116
+examples/c/plux-ebpf-raw-demo.bpf.c
+  s_4509af1e0415e8::t_cfb25c60baa1f4 1-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "54e14bbde643d0df6adf8b44c7dca300b2571ffc",
+  "prompts": {},
+  "sessions": {
+    "s_4509af1e0415e8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e8799-7416-7193-9744-048f0a99a8d1",
+        "model": "gpt-5"
+      },
+      "human_author": "Lance Yang <ioworker0@gmail.com>"
+    }
+  }
+}
