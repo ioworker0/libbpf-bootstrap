@@ -192,13 +192,23 @@ static void *heartbeat_thread_func(void *arg)
 {
     struct socket_protocol *sp = (struct socket_protocol *)arg;
     int heartbeat_interval = 5; /* default */
+    int sleep_step_ms = 100;
+    int sleep_steps;
+    int i;
+    struct timespec sleep_step;
 
     if (!sp) {
         return NULL;
     }
 
+    sleep_steps = heartbeat_interval * 1000 / sleep_step_ms;
+    sleep_step.tv_sec = 0;
+    sleep_step.tv_nsec = sleep_step_ms * 1000 * 1000L;
+
     while (sp->running) {
-        sleep(heartbeat_interval);
+        for (i = 0; i < sleep_steps && sp->running; i++) {
+            nanosleep(&sleep_step, NULL);
+        }
 
         if (!sp->running) {
             break;
@@ -392,4 +402,3 @@ int socket_send_log_error(struct socket_protocol *sp, const char *message)
 
     return socket_send_raw_message(sp, MSG_TYPE_LOGS_ERROR, message, strlen(message));
 }
-
