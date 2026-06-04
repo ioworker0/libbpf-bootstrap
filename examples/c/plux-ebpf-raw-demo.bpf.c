@@ -21,7 +21,7 @@ int handle_exec(void *ctx)
 	__u32 pid;
 
 	pid = bpf_get_current_pid_tgid() >> 32;
-	if (target_pid && pid != target_pid)
+	if (pid != target_pid)
 		return 0;
 
 	sample.pid = pid;
