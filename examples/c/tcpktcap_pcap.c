@@ -293,14 +293,53 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *pkthdr, const
 		// 根据 filter_mode 决定
 		switch (g_config.filter_mode) {
 		case 0:  // AND: IP 和端口都要匹配
+			/*
+			 * mode 0: 所有已配置的条件都必须命中，未配置的条件不限制。
+			 *
+			 * filter_ip != 0, filter_port != 0:
+			 *   包里必须出现 filter_ip，并且源/目的端口里必须出现 filter_port；
+			 *   IP 和端口不要求在同一端。
+			 * filter_ip != 0, filter_port == 0:
+			 *   只限制 IP，抓这个 IP 相关的所有 TCP 包。
+			 * filter_ip == 0, filter_port != 0:
+			 *   只限制端口，抓这个端口相关的所有 TCP 包。
+			 * filter_ip == 0, filter_port == 0:
+			 *   不做用户态过滤，效果是抓所有 TCP 包。
+			 */
 			if (!ip_match || !port_match)
 				return;
 			break;
 		case 1:  // OR: IP 或端口匹配即可
+			/*
+			 * mode 1: 任一已配置的条件命中即可，未配置的条件不参与 OR。
+			 *
+			 * filter_ip != 0, filter_port != 0:
+			 *   包里出现 filter_ip，或者源/目的端口里出现 filter_port，
+			 *   满足任一条件就通过。
+			 * filter_ip != 0, filter_port == 0:
+			 *   只有 IP 条件参与 OR，效果等同于只限制 IP。
+			 * filter_ip == 0, filter_port != 0:
+			 *   只有端口条件参与 OR，效果等同于只限制端口。
+			 * filter_ip == 0, filter_port == 0:
+			 *   没有任何条件参与 OR；外层不会进入过滤逻辑，效果是抓所有 TCP 包。
+			 */
 			if (!ip_match && !port_match)
 				return;
 			break;
 		case 2:  // tuple: 源或目的整体匹配
+			/*
+			 * mode 2: 把 IP 和端口作为同一端的端点来匹配。
+			 *
+			 * filter_ip != 0, filter_port != 0:
+			 *   必须是 (src_ip, src_port) 或 (dst_ip, dst_port) 整体等于
+			 *   filter_ip:filter_port；用于精确抓某个服务端点。
+			 * filter_ip != 0, filter_port == 0:
+			 *   没有端口可组成完整端点，退化为只限制 IP；BPF 已用 host 预过滤。
+			 * filter_ip == 0, filter_port != 0:
+			 *   没有 IP 可组成完整端点，退化为只限制端口；BPF 已用 port 预过滤。
+			 * filter_ip == 0, filter_port == 0:
+			 *   不做用户态过滤，效果是抓所有 TCP 包。
+			 */
 			if (g_config.filter_ip != 0 && g_config.filter_port != 0) {
 				int src_tuple_match = (src_ip == g_config.filter_ip && src_port == g_config.filter_port);
 				int dst_tuple_match = (dst_ip == g_config.filter_ip && dst_port == g_config.filter_port);
@@ -347,15 +386,21 @@ static void build_bpf_filter(char *filter_buf, size_t buf_size)
 	offset += snprintf(filter_buf + offset, buf_size - offset, "tcp");
 	
 	// 如果指定了 IP 或端口，添加到 BPF filter（提高效率）
-	if (g_config.filter_ip != 0) {
+	if (g_config.filter_ip != 0 && g_config.filter_port != 0 && g_config.filter_mode == 1) {
 		struct in_addr addr = { .s_addr = g_config.filter_ip };
 		offset += snprintf(filter_buf + offset, buf_size - offset, 
-		                   " and host %s", inet_ntoa(addr));
-	}
-	
-	if (g_config.filter_port != 0) {
-		offset += snprintf(filter_buf + offset, buf_size - offset,
-		                   " and port %u", g_config.filter_port);
+		                   " and (host %s or port %u)", inet_ntoa(addr), g_config.filter_port);
+	} else {
+		if (g_config.filter_ip != 0) {
+			struct in_addr addr = { .s_addr = g_config.filter_ip };
+			offset += snprintf(filter_buf + offset, buf_size - offset,
+			                   " and host %s", inet_ntoa(addr));
+		}
+
+		if (g_config.filter_port != 0) {
+			offset += snprintf(filter_buf + offset, buf_size - offset,
+			                   " and port %u", g_config.filter_port);
+		}
 	}
 }
 
